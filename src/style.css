@@ -624,14 +624,23 @@ textarea.composer {
 .warn { color: var(--today); margin: 0 0 8px; }
 
 .timer-wrap { display: grid; place-items: center; padding-top: 12px; text-align: center; }
-.ring { width: min(280px, 78vw); height: auto; }
+.ring-wrap {
+  position: relative;
+  width: min(260px, 74vw);
+  height: min(260px, 74vw);
+}
+.ring { width: 100%; height: 100%; display: block; }
 .ring-track { fill: none; stroke: var(--line); stroke-width: 10; }
 .ring-value { fill: none; stroke: var(--accent); stroke-width: 10; stroke-linecap: round; }
 .timer-readout {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  display: grid;
+  place-items: center;
   font-variant-numeric: tabular-nums;
-  font-size: 3.4rem;
+  font-size: 3.2rem;
   letter-spacing: -0.04em;
-  margin: 8px 0 0;
   font-family: var(--serif);
 }
 .timer-copy { margin-top: 8px; }

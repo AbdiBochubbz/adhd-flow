@@ -26,7 +26,8 @@ export function cspPlugin() {
     transformIndexHtml: {
       order: "post",
       handler(html) {
-        const policy = `<meta http-equiv="Content-Security-Policy" content="${CSP}">`;
+        const metaPolicy = CSP.replace("; frame-ancestors 'none'", "");
+        const policy = `<meta http-equiv="Content-Security-Policy" content="${metaPolicy}">`;
         if (html.includes("Content-Security-Policy")) return html;
         return html.replace(/<meta name="csp-slot" content=""\s*\/?>/, policy);
       },
