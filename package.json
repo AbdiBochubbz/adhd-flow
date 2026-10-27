@@ -1,0 +1,16 @@
+{
+  "name": "still",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "icons": "node scripts/make-icons.mjs",
+    "dev": "vite --host 0.0.0.0 --port 47321 --strictPort",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 47321 --strictPort",
+    "test": "node --test tests/*.test.js"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5"
+  }
+}
