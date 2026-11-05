@@ -1,4 +1,6 @@
 import { chibiFigure } from "./chibi.js";
+import { daypart } from "./daypart.js";
+import { studyActivity } from "./study.js";
 import { draftFrom, previewCopy } from "./draft.js";
 import { h, icon, svg } from "./dom.js";
 import { CHIBIS, SEAT_COUNT } from "./room.js";
@@ -957,10 +959,89 @@ function currentSheet(state, now) {
   return null;
 }
 
+function activityProp(kind) {
+  if (kind === "laptop") {
+    return h(
+      "span",
+      { class: "prop prop-laptop", "aria-hidden": "true" },
+      h("span", { class: "laptop-lid" }),
+      h("span", { class: "laptop-base" }),
+    );
+  }
+  if (kind === "phone") {
+    return h("span", { class: "prop prop-phone", "aria-hidden": "true" });
+  }
+  if (kind === "books") {
+    return h(
+      "span",
+      { class: "prop prop-books", "aria-hidden": "true" },
+      h("span", {}),
+      h("span", {}),
+      h("span", { class: "page" }),
+    );
+  }
+  return h(
+    "span",
+    { class: "prop prop-notebook", "aria-hidden": "true" },
+    h("span", { class: "page" }),
+    h("span", { class: "pen" }),
+  );
+}
+
+function hallway(room) {
+  const floor = room.floor === "3" ? "3" : "1";
+  const doors = room.rooms.length
+    ? room.rooms.map((item) => ({ code: item.code, label: item.name, count: item.count, join: true }))
+    : [{ code: "", label: "Empty classroom", count: 0, join: false }];
+  return h(
+    "div",
+    { class: "hallway", "data-floor": floor },
+    h("p", { class: "hall-marker", "aria-hidden": "true" }, floor === "3" ? "3F" : "1F"),
+    h("div", { class: "hall-shine", "aria-hidden": "true" }),
+    h(
+      "div",
+      { class: "hall-doors" },
+      doors.map((door) =>
+        h(
+          "button",
+          {
+            class: "hall-door",
+            dataset: door.join ? { action: "room-join", code: door.code } : { action: "room-mode", value: "create" },
+            "aria-label": door.join ? `Enter ${door.label}` : "Create a classroom",
+          },
+          h("span", { class: "door-leaf" }),
+          h("span", { class: "door-label" }, door.label),
+          door.join ? h("span", { class: "door-count" }, `${door.count} inside`) : h("span", { class: "door-count" }, "Open"),
+        ),
+      ),
+    ),
+    h("div", { class: "hall-lockers", "aria-hidden": "true" }, h("span"), h("span"), h("span"), h("span"), h("span"), h("span")),
+    h(
+      "div",
+      { class: "hall-floors", role: "group", "aria-label": "Floor" },
+      ["1", "3"].map((id) =>
+        h(
+          "button",
+          {
+            class: floor === id ? "is-on" : "",
+            "aria-pressed": floor === id ? "true" : "false",
+            dataset: { action: "room-floor", value: id },
+          },
+          id === "1" ? "1F day" : "3F evening",
+        ),
+      ),
+    ),
+  );
+}
+
 function roomView(state) {
   const room = state.room;
   if (room.current) return classroom(state);
   return h(
+    "div",
+    {},
+    hallway(room),
+    h(
     "section",
     { class: "room-setup" },
     h("p", { class: "view-kicker" }, "Study room"),
@@ -1028,6 +1109,7 @@ function roomView(state) {
         : "With no server, those three ways to join work on this device only. Add a server address when another phone should see the room.",
     ),
     room.error ? h("p", { class: "error" }, room.error) : null,
+    ),
   );
 }
 
@@ -1128,15 +1210,18 @@ function classroom(state) {
         const key = `${member.id}:${member.seat}`;
         const arriving = !room.walked[key];
         if (arriving) room.walked[key] = true;
+        const activity = studyActivity(member.chibi);
         return h(
           "div",
           {
-            class: arriving ? "walker is-walking" : "walker",
+            class: arriving ? "walker is-walking" : "walker is-seated",
             style: `--col:${member.seat % 3};--row:${Math.floor(member.seat / 3)}`,
+            dataset: { member: member.id, activity },
           },
+          h("span", { class: "zzz", "aria-hidden": "true" }, "z"),
           chibiFigure(member.chibi),
+          arriving ? null : activityProp(activity),
           h("span", { class: "desk-name" }, member.displayName),
-          member.focusing ? h("span", { class: "studying" }, "studying") : null,
         );
       }),
     ),
@@ -1170,10 +1255,11 @@ function classroom(state) {
 
 export function renderScreen(state) {
   const now = new Date();
+  const shell = { class: "frame", "data-daypart": daypart(now) };
   if (state.screen === "error") {
     return h(
       "div",
-      { class: "frame" },
+      shell,
       h(
         "section",
         { class: "gate" },
@@ -1185,7 +1271,7 @@ export function renderScreen(state) {
   if (state.screen === "setup" || state.screen === "lock") {
     return h(
       "div",
-      { class: "frame" },
+      shell,
       gate(state),
       currentSheet(state, now),
       toast(state),
@@ -1208,7 +1294,7 @@ export function renderScreen(state) {
 
   return h(
     "div",
-    { class: "frame" },
+    shell,
     h(
       "header",
       { class: "topbar" },

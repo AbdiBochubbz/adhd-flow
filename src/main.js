@@ -15,6 +15,7 @@ import {
   updateBadge,
 } from "./notify.js";
 import { clearWidget, isNative, nativeActionFromUrl, startNativeListening, watchNativeLinks } from "./native.js";
+import { studyPhase } from "./study.js";
 import { connectPresence } from "./presence.js";
 import { inviteLink } from "./room.js";
 import { dayKey, endOfDay, formatClock, fromDatetimeLocal } from "./time.js";
@@ -86,6 +87,8 @@ const state = {
     roomJson: "",
     walked: {},
     focusLatch: false,
+    floor: "1",
+    seatedAt: {},
     current: null,
     you: null,
     invite: "",
@@ -158,14 +161,35 @@ function render() {
   if (mainEl) mainEl.scrollTop = mainTop;
   const sheetEl = document.querySelector(".sheet");
   if (sheetEl) sheetEl.scrollTop = sheetTop;
-  for (const node of document.querySelectorAll(".walker.is-walking")) {
-    const stop = (event) => {
-      if (event && event.animationName && event.animationName !== "walk-in") return;
-      node.classList.remove("is-walking");
-    };
-    node.addEventListener("animationend", stop);
-    setTimeout(() => node.classList.remove("is-walking"), 1300);
-  }
+  for (const node of document.querySelectorAll(".walker.is-walking")) startDeskWalk(node);
+}
+
+function startDeskWalk(node) {
+  const floor = node.closest(".floor");
+  if (!floor) return;
+  const col = Number(node.style.getPropertyValue("--col")) || 0;
+  const row = Number(node.style.getPropertyValue("--row")) || 0;
+  const width = floor.clientWidth || 320;
+  const height = floor.clientHeight || 420;
+  const deskX = col * (width / 3);
+  const deskY = row * 104 + 18;
+  const doorX = width * 0.34;
+  const doorY = height - 28;
+  const shift = (x, y) => `translate(${Math.round(x - deskX)}px, ${Math.round(y - deskY)}px)`;
+  const anim = node.animate(
+    [
+      { transform: shift(doorX, doorY) },
+      { transform: shift(doorX, deskY + 10), offset: 0.46 },
+      { transform: shift(deskX, deskY + 10), offset: 0.74 },
+      { transform: "translate(0px, 8px)" },
+    ],
+    { duration: 1800, easing: "ease-in-out", fill: "forwards" },
+  );
+  anim.onfinish = () => {
+    anim.cancel();
+    node.classList.remove("is-walking");
+    node.classList.add("is-seated");
+  };
 }
 
 function snapshot() {
@@ -992,6 +1016,11 @@ function onClick(event) {
     render();
     return;
   }
+  if (action === "room-floor") {
+    state.room.floor = button.dataset.value === "3" ? "3" : "1";
+    render();
+    return;
+  }
   if (action === "room-mode") {
     state.room.mode = button.dataset.value;
     render();
@@ -1551,6 +1580,11 @@ function ensurePresence() {
     },
     onRoom(room, you) {
       const next = room ? JSON.stringify(room.members) : "";
+      const seated = { ...state.room.seatedAt };
+      for (const member of room?.members || []) {
+        if (!seated[member.id]) seated[member.id] = Date.now();
+      }
+      state.room.seatedAt = seated;
       state.room.current = room;
       state.room.you = you;
       state.room.invite = room ? inviteLink(room.code, location.href) : "";
@@ -1661,6 +1695,18 @@ async function boot() {
   }
   render();
   registerServiceWorker();
+  setInterval(refreshRoomPoses, 1000);
+}
+
+function refreshRoomPoses() {
+  if (state.screen !== "app") return;
+  const now = Date.now();
+  for (const node of document.querySelectorAll(".walker[data-member]")) {
+    if (node.classList.contains("is-walking")) continue;
+    const phase = studyPhase(state.room.seatedAt[node.dataset.member], state.lastActivity, now);
+    node.classList.toggle("is-snoozing", phase === "snooze");
+    node.classList.toggle("is-seated", phase !== "snooze");
+  }
 }
 
 app.addEventListener("click", onClick);

@@ -65,7 +65,9 @@ Add task opens the composer. The rest of the widget opens Still.
 
 ### Study room
 
-The Room tab is a classroom: wooden desks, a board, and windows. Pick one of six original looks. When you join, that chibi walks in from the door and sits. Tap another desk to walk there. **I'm focusing** (or a running timer) shows a quiet “studying” mark. Your next private task sits under the desks and can be marked done without leaving the room. Tasks are not sent.
+The Room tab opens on a hallway. 1F is daylight and 3F is warmer evening light. Doors along the hall are classrooms. Pick one of six original looks. When you join, that chibi walks up the aisle and sits. At the desk they write, use a laptop, look at a phone, or read, depending on the look. After about a minute and a half with no taps they snooze, then wake and continue. A tap wakes them sooner. Your next private task sits under the desks. Tasks are not sent.
+
+The task list and the add screen shift with the clock: morning, midday, evening, and night.
 
 - **Public** rooms can be browsed.
 - **Code** joins a room by its six-character code.
