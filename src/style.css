@@ -808,7 +808,27 @@ summary { min-height: 44px; display: flex; align-items: center; cursor: pointer;
 }
 .class-board p { margin: 0; font-family: var(--serif); font-size: 1.25rem; }
 .board-note { margin-top: 4px !important; font-family: var(--sans) !important; font-size: 0.9rem !important; opacity: 0.85; }
-.desk-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+.floor { position: relative; margin-top: 8px; }
+.desk-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.walker {
+  position: absolute;
+  width: 33.33%;
+  left: calc(var(--col) * 33.33%);
+  top: calc(var(--row) * 104px + 28px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+.walker.is-walking { animation: walk-in 1.15s ease forwards; }
+.walker.is-walking .chibi { animation: chibi-bob 0.32s ease-in-out infinite; }
+@keyframes walk-in {
+  from { left: 33.33%; top: calc(100% - 36px); }
+  to { left: calc(var(--col) * 33.33%); top: calc(var(--row) * 104px + 28px); }
+}
+@keyframes chibi-bob {
+  50% { transform: translateY(-4px); }
+}
 .desk {
   min-height: 96px;
   border-radius: 12px 12px 8px 8px;
@@ -830,6 +850,17 @@ summary { min-height: 44px; display: flex; align-items: center; cursor: pointer;
   font-size: 11px;
   font-weight: 650;
 }
-.desk .chibi { width: 40px; height: 48px; }
+.desk .chibi, .walker .chibi { width: 40px; height: 48px; }
+.studying { font-size: 10px; letter-spacing: 0.04em; color: #3e6b56; }
+.room-task {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 250, 244, 0.82);
+  color: #3a2a1c;
+}
+.room-task p { margin: 0 0 6px; font-size: 0.82rem; }
+.room-task-row { display: flex; flex-direction: column; gap: 8px; }
+.room-task-row .btn-primary { min-height: 44px; }
 .room-bar { margin-top: 12px; }
 .room-bar p { color: #5c4a3a; font-size: 0.82rem; overflow-wrap: anywhere; }

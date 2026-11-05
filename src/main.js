@@ -84,6 +84,8 @@ const state = {
     rooms: [],
     roomsJson: "",
     roomJson: "",
+    walked: {},
+    focusLatch: false,
     current: null,
     you: null,
     invite: "",
@@ -156,6 +158,14 @@ function render() {
   if (mainEl) mainEl.scrollTop = mainTop;
   const sheetEl = document.querySelector(".sheet");
   if (sheetEl) sheetEl.scrollTop = sheetTop;
+  for (const node of document.querySelectorAll(".walker.is-walking")) {
+    const stop = (event) => {
+      if (event && event.animationName && event.animationName !== "walk-in") return;
+      node.classList.remove("is-walking");
+    };
+    node.addEventListener("animationend", stop);
+    setTimeout(() => node.classList.remove("is-walking"), 1300);
+  }
 }
 
 function snapshot() {
@@ -824,6 +834,7 @@ function startFocusTimer(taskId) {
   state.timer.running = true;
   state.view = "timer";
   state.sheet = null;
+  publishRoomFocus();
   render();
 }
 
@@ -835,6 +846,7 @@ function resumeTimer() {
   }
   state.timer.endsAt = Date.now() + state.timer.remainingMs;
   state.timer.running = true;
+  publishRoomFocus();
   render();
 }
 
@@ -842,6 +854,7 @@ function pauseTimer() {
   if (!state.timer.running) return;
   state.timer.remainingMs = Math.max(0, state.timer.endsAt - Date.now());
   state.timer.running = false;
+  publishRoomFocus();
   render();
 }
 
@@ -851,6 +864,7 @@ function resetTimer() {
   state.timer.taskId = null;
   state.timer.durationMs = state.settings.pomodoroMin * 60 * 1000;
   state.timer.remainingMs = state.timer.durationMs;
+  publishRoomFocus();
   render();
 }
 
@@ -1006,6 +1020,7 @@ function onClick(event) {
       displayName: state.room.displayName,
       chibi: state.room.chibi,
       seat: 0,
+      focusing: Boolean(state.room.focusLatch),
     });
     if (result?.ok === false) {
       state.room.error = result.error;
@@ -1025,12 +1040,20 @@ function onClick(event) {
     }
     return;
   }
+  if (action === "room-focus") {
+    state.room.focusLatch = !state.room.focusLatch;
+    publishRoomFocus();
+    render();
+    return;
+  }
   if (action === "room-leave") {
     ensurePresence().leave();
     state.room.current = null;
     state.room.you = null;
     state.room.invite = "";
     state.room.roomJson = "";
+    state.room.walked = {};
+    state.room.focusLatch = false;
     ensurePresence().list();
     render();
     return;
@@ -1500,6 +1523,11 @@ function rememberRoomProfile() {
   }
 }
 
+function publishRoomFocus() {
+  if (!state.room.current || !presenceHandle?.pose) return;
+  presenceHandle.pose(Boolean(state.timer.running || state.room.focusLatch));
+}
+
 function ensurePresence() {
   const url = state.room.serverUrl.trim();
   const key = url || "local";
@@ -1542,6 +1570,7 @@ function joinRoom(code) {
     displayName: state.room.displayName,
     chibi: state.room.chibi,
     seat: 0,
+    focusing: Boolean(state.room.focusLatch),
   });
   if (result?.ok === false) {
     state.room.error = result.error;

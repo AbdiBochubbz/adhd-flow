@@ -40,6 +40,10 @@ wss.on("connection", (socket) => {
       moveSeat(socket, Number(message.seat));
       return;
     }
+    if (message.type === "focus") {
+      setFocus(socket, Boolean(message.focusing));
+      return;
+    }
     if (message.type === "leave") leave(socket);
   });
   socket.on("close", () => {
@@ -50,7 +54,7 @@ wss.on("connection", (socket) => {
 
 function createRoom(socket, message) {
   leave(socket);
-  const profile = sanitizeMember({ displayName: message.displayName, chibi: message.chibi, seat: 0 });
+  const profile = sanitizeMember({ displayName: message.displayName, chibi: message.chibi, seat: 0, focusing: message.focusing });
   if (!profile) return fail(socket, "Add your name first.");
   let code = "";
   for (let i = 0; i < 6 && (!code || rooms.has(code)); i += 1) code = makeRoomCode();
@@ -77,7 +81,7 @@ function joinRoom(socket, message) {
   const others = [...room.members.values()];
   const seat = firstFreeSeat(others, Number(message.seat));
   if (seat == null) return fail(socket, "Every seat is taken.");
-  const profile = sanitizeMember({ displayName: message.displayName, chibi: message.chibi, seat });
+  const profile = sanitizeMember({ displayName: message.displayName, chibi: message.chibi, seat, focusing: message.focusing });
   if (!profile) return fail(socket, "Add your name first.");
   const memberId = crypto.randomUUID();
   room.members.set(memberId, { id: memberId, ...profile });
@@ -96,6 +100,15 @@ function moveSeat(socket, seat) {
     if (other.id !== member.id && other.seat === seat) return fail(socket, "Someone is already in that seat.");
   }
   member.seat = seat;
+  broadcast(room);
+}
+
+function setFocus(socket, focusing) {
+  const session = sockets.get(socket);
+  const room = rooms.get(session?.code);
+  const member = room?.members.get(session?.memberId);
+  if (!member) return;
+  member.focusing = focusing;
   broadcast(room);
 }
 
@@ -135,6 +148,7 @@ function wireRoom(room) {
       displayName: member.displayName,
       chibi: member.chibi,
       seat: member.seat,
+      focusing: Boolean(member.focusing),
     })),
   };
 }

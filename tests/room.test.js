@@ -16,7 +16,7 @@ test("presence keeps a name, look, and seat, and drops anything else", () => {
     tasks: [{ title: "secret homework" }],
     notes: "do not share",
   });
-  assert.deepEqual(member, { displayName: "Ana", chibi: "moss", seat: 3 });
+  assert.deepEqual(member, { displayName: "Ana", chibi: "moss", seat: 3, focusing: false });
   assert.equal(JSON.stringify(member).includes("secret"), false);
   assert.equal(sanitizeMember({ displayName: "Ana", chibi: "komi", seat: 1 }), null);
 });

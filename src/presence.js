@@ -52,6 +52,11 @@ function connectLocal(handlers) {
       publish();
       return result;
     },
+    pose(focusing) {
+      poseLocal(memberId, focusing);
+      broadcast(channel);
+      publish();
+    },
     leave() {
       leaveLocal(memberId);
       broadcast(channel);
@@ -132,6 +137,9 @@ function connectSocket(url, handlers) {
       send({ type: "move", seat });
       return { ok: true };
     },
+    pose(focusing) {
+      send({ type: "focus", focusing: Boolean(focusing) });
+    },
     leave() {
       send({ type: "leave" });
     },
@@ -148,6 +156,7 @@ function presenceBody(input) {
     displayName: input.displayName,
     chibi: input.chibi,
     seat: input.seat,
+    focusing: Boolean(input.focusing),
     name: input.name,
     public: input.public,
   };
@@ -205,12 +214,13 @@ function publicRoom(room) {
       displayName: member.displayName,
       chibi: member.chibi,
       seat: member.seat,
+      focusing: Boolean(member.focusing),
     })),
   };
 }
 
 function createLocal(memberId, input) {
-  const profile = sanitizeMember({ displayName: input.displayName, chibi: input.chibi, seat: 0 });
+  const profile = sanitizeMember({ displayName: input.displayName, chibi: input.chibi, seat: 0, focusing: input.focusing });
   if (!profile) return { ok: false, error: "Add your name first." };
   const rooms = readRooms();
   leaveId(rooms, memberId);
@@ -235,12 +245,21 @@ function joinLocal(memberId, input) {
   const others = room.members.filter((member) => member.id !== memberId);
   const seat = firstFreeSeat(others, Number(input.seat));
   if (seat == null) return { ok: false, error: "Every seat is taken." };
-  const profile = sanitizeMember({ displayName: input.displayName, chibi: input.chibi, seat });
+  const profile = sanitizeMember({ displayName: input.displayName, chibi: input.chibi, seat, focusing: input.focusing });
   if (!profile) return { ok: false, error: "Add your name first." };
   leaveId(rooms, memberId);
   rooms[code].members.push({ id: memberId, ...profile, seen: Date.now() });
   writeRooms(rooms);
   return { ok: true, code };
+}
+
+function poseLocal(memberId, focusing) {
+  const rooms = readRooms();
+  const found = findMembership(rooms, memberId);
+  if (!found) return;
+  found.member.focusing = Boolean(focusing);
+  found.member.seen = Date.now();
+  writeRooms(rooms);
 }
 
 function moveLocal(memberId, seat) {

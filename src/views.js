@@ -959,7 +959,7 @@ function currentSheet(state, now) {
 
 function roomView(state) {
   const room = state.room;
-  if (room.current) return classroom(room);
+  if (room.current) return classroom(state);
   return h(
     "section",
     { class: "room-setup" },
@@ -1083,10 +1083,12 @@ function createRoom(room) {
   );
 }
 
-function classroom(room) {
+function classroom(state) {
+  const room = state.room;
   const current = room.current;
   const members = current.members || [];
-  const seats = Array.from({ length: SEAT_COUNT }, (_, seat) => members.find((member) => member.seat === seat) || null);
+  const now = new Date();
+  const task = nextTask(state.tasks, now.getTime());
   return h(
     "section",
     { class: "classroom" },
@@ -1105,24 +1107,61 @@ function classroom(room) {
     ),
     h(
       "div",
-      { class: "desk-grid" },
-      seats.map((member, seat) =>
-        h(
-          "button",
-          {
-            class: member ? (member.id === room.you?.id ? "desk is-mine" : "desk is-taken") : "desk",
-            dataset: { action: "room-seat", seat: String(seat) },
-            "aria-label": member ? `${member.displayName}, seat ${seat + 1}` : `Empty seat ${seat + 1}`,
-          },
-          member ? chibiFigure(member.chibi) : h("span", { class: "desk-empty" }, "Sit"),
-          h("span", { class: "desk-name" }, member ? member.displayName : ""),
-        ),
+      { class: "floor" },
+      h(
+        "div",
+        { class: "desk-grid" },
+        Array.from({ length: SEAT_COUNT }, (_, seat) => {
+          const member = members.find((item) => item.seat === seat);
+          return h(
+            "button",
+            {
+              class: member && member.id === room.you?.id ? "desk is-mine" : "desk",
+              dataset: { action: "room-seat", seat: String(seat) },
+              "aria-label": member ? `${member.displayName}, seat ${seat + 1}` : `Empty seat ${seat + 1}`,
+            },
+            h("span", { class: "desk-empty" }, member ? "" : "Sit"),
+          );
+        }),
       ),
+      members.map((member) => {
+        const key = `${member.id}:${member.seat}`;
+        const arriving = !room.walked[key];
+        if (arriving) room.walked[key] = true;
+        return h(
+          "div",
+          {
+            class: arriving ? "walker is-walking" : "walker",
+            style: `--col:${member.seat % 3};--row:${Math.floor(member.seat / 3)}`,
+          },
+          chibiFigure(member.chibi),
+          h("span", { class: "desk-name" }, member.displayName),
+          member.focusing ? h("span", { class: "studying" }, "studying") : null,
+        );
+      }),
+    ),
+    h(
+      "div",
+      { class: "room-task" },
+      h("p", {}, "Your list stays on this phone"),
+      task
+        ? h(
+            "div",
+            { class: "room-task-row" },
+            h("strong", {}, task.title),
+            h("button", { class: "btn-primary", dataset: { action: "complete", id: task.id } }, "Mark done"),
+          )
+        : h("p", { class: "help" }, "Nothing is waiting on your private list."),
     ),
     h(
       "div",
       { class: "room-bar" },
       h("p", {}, h("strong", {}, current.code), " · ", room.invite),
+      h(
+        "button",
+        { class: "btn-ghost", "aria-pressed": room.focusLatch ? "true" : "false", dataset: { action: "room-focus" } },
+        room.focusLatch ? "Still focusing" : "I'm focusing",
+      ),
       h("button", { class: "btn-ghost", dataset: { action: "room-copy" } }, "Copy invite link"),
       h("button", { class: "btn-quiet", dataset: { action: "room-leave" } }, "Leave the room"),
     ),

@@ -43,7 +43,7 @@ export function sanitizeMember(raw) {
   const seat = Number(raw?.seat);
   if (!displayName || !chibi) return null;
   if (!Number.isInteger(seat) || seat < 0 || seat >= SEAT_COUNT) return null;
-  return { displayName, chibi, seat };
+  return { displayName, chibi, seat, focusing: Boolean(raw?.focusing) };
 }
 
 export function firstFreeSeat(members, preferred) {
