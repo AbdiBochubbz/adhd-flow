@@ -1,0 +1,14 @@
+{
+  "appId": "app.still.tasks",
+  "appName": "Still",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_still",
+      "iconColor": "#e4c4a0"
+    }
+  }
+}

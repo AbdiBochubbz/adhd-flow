@@ -7,6 +7,7 @@ const ICONS = {
   list: "M9 7h11M9 12h11M9 17h11M4 7h.01M4 12h.01M4 17h.01",
   timer: "M12 7v5l3 2M12 21a8 8 0 1 0 0-16 8 8 0 0 0 0 16z",
   settings: "M4 8h16M4 16h16M9 8a2 2 0 1 0 0 .01M15 16a2 2 0 1 0 0 .01",
+  room: "M4 10h16v10H4zM4 10l8-6 8 6M8 20v-6h8v6",
   close: "M6 6l12 12M18 6 6 18",
 };
 

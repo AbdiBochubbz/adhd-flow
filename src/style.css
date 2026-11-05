@@ -370,7 +370,7 @@ img { max-width: 100%; }
   right: 12px;
   bottom: calc(10px + env(safe-area-inset-bottom));
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 4px;
   background: var(--bg-elev);
   border: 1px solid var(--line);
@@ -387,7 +387,7 @@ img { max-width: 100%; }
   align-items: center;
   justify-content: center;
   gap: 2px;
-  font-size: 12px;
+  font-size: 11px;
   position: relative;
 }
 .nav-btn.is-on { background: var(--card); color: var(--text); }
@@ -743,3 +743,93 @@ summary { min-height: 44px; display: flex; align-items: center; cursor: pointer;
   .card h2 { font-size: 1.7rem; }
   .main { padding-left: 16px; padding-right: 16px; }
 }
+
+.room-title {
+  font-family: var(--serif);
+  font-size: 1.7rem;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  margin: 0 0 8px;
+}
+.chibi-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; }
+.chibi-pick {
+  min-width: 76px;
+  min-height: 96px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.chibi-pick.is-on { border-color: var(--accent); color: var(--text); }
+.chibi { width: 48px; height: 58px; display: block; }
+.room-card {
+  width: 100%;
+  min-height: 64px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  text-align: left;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.room-card span { color: var(--muted); font-size: 0.9rem; }
+
+.classroom {
+  margin: 0 -8px;
+  padding: 12px 10px 8px;
+  border-radius: 28px;
+  background: linear-gradient(#d7ebf6 0 72px, #f4e7d4 72px);
+}
+.class-windows { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.window {
+  height: 52px;
+  border-radius: 8px 8px 4px 4px;
+  border: 4px solid #f7f1e8;
+  background:
+    linear-gradient(#c5ddb4, #c5ddb4) bottom / 100% 16px no-repeat,
+    linear-gradient(#b9d7ee, #e7f4fb);
+  box-shadow: inset 0 0 0 1px rgba(90, 70, 40, 0.15);
+}
+.class-board {
+  margin: 12px 8px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: #3e6b56;
+  color: #f4f7f2;
+  box-shadow: 0 0 0 8px #8d5a34;
+}
+.class-board p { margin: 0; font-family: var(--serif); font-size: 1.25rem; }
+.board-note { margin-top: 4px !important; font-family: var(--sans) !important; font-size: 0.9rem !important; opacity: 0.85; }
+.desk-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+.desk {
+  min-height: 96px;
+  border-radius: 12px 12px 8px 8px;
+  background: linear-gradient(#f0c48a, #f0c48a) top / 100% 10px no-repeat, linear-gradient(#d08a45, #c17b3c);
+  color: #3a2a1c;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 4px 4px 6px;
+}
+.desk.is-mine { outline: 2px solid #3e6b56; outline-offset: 2px; }
+.desk-empty { font-size: 12px; color: rgba(58, 42, 28, 0.7); margin-bottom: 16px; }
+.desk-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 650;
+}
+.desk .chibi { width: 40px; height: 48px; }
+.room-bar { margin-top: 12px; }
+.room-bar p { color: #5c4a3a; font-size: 0.82rem; overflow-wrap: anywhere; }

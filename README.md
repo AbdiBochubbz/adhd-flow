@@ -32,36 +32,81 @@ The first run needs the Pages environment to exist. If the Action asks for permi
 
 GitHub Pages serves the site over HTTPS, which phones require for install, notifications, and the microphone.
 
-## Install on Android
+## Install the Android app
+
+The Android project in `android/` is a Capacitor shell around the same encrypted app. It installs like a normal app, schedules reminders while Still is closed, and has a home-screen widget.
+
+### Sideload the debug APK
+
+The debug APK is signed with the Android debug key. It is for your own phone, not the Play Store.
+
+1. Build it (Android SDK and JDK 21):
+
+```bash
+npm install
+npm run android:debug
+```
+
+The file is `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+2. Copy that APK to the phone.
+3. Open it. If Android blocks the install, allow installs from that app (Files, Chrome, or Drive) under **Settings → Apps → Special app access → Install unknown apps**.
+4. Open Still, choose a PIN, and allow notifications when asked. On Android 12 and newer, also allow **Alarms & reminders** (Settings → Apps → Still → Alarms & reminders) if a reminder does not fire while the app is closed. This build declares `USE_EXACT_ALARM`, so a sideloaded install is usually allowed to ring on time without that extra step. A future Play Store build may have to drop that permission and rely on the toggle instead.
+
+Long-press the Still icon for **Add task** and **Speak task**.
+
+### Home-screen widget
+
+Touch and hold the home screen → Widgets → **Still**. It shows the next task and an **Add task** button.
+
+The task name is shown only when **Show task names** is on. Otherwise the widget says “A task is waiting” plus the due time. That line is stored outside the encrypted vault so Android can draw it while Still is locked. Turn the switch off if the home screen should not show the name.
+
+Add task opens the composer. The rest of the widget opens Still.
+
+### Study room
+
+The Room tab is a classroom: wooden desks, a board, and windows. You show a name, one of six original looks, and a seat. Tasks are not sent.
+
+- **Public** rooms can be browsed.
+- **Code** joins a room by its six-character code.
+- **Create** makes a public room, or a private one that only the code and invite link can open.
+- An invite link looks like `https://<your-site>/?room=AB23CD`. Inside the Android app it is `still://room?code=AB23CD`.
+
+With the shared-server field left blank, those three ways to join work on this device only. To share a room with another phone:
+
+```bash
+npm run presence
+```
+
+That listens on `ws://127.0.0.1:47322`. Put a `wss://` address in the room screen when the server is reachable from the phone. The server stores names, looks, and seats, and nothing else.
+
+### Signed release build
+
+Create a keystore on your machine. Do not commit it or the passwords.
+
+```bash
+keytool -genkeypair -v -keystore android/still-release.keystore -alias still -keyalg RSA -keysize 2048 -validity 10000
+```
+
+Copy `android/keystore.properties.example` to `android/keystore.properties` and fill in the two passwords. `storeFile` is relative to the `android/` folder. Then:
+
+```bash
+cd android
+./gradlew assembleRelease
+./gradlew bundleRelease
+```
+
+`assembleRelease` writes `android/app/build/outputs/apk/release/app-release.apk`. `bundleRelease` writes an `.aab` under `android/app/build/outputs/bundle/release/` for Play App Signing. If `keystore.properties` is missing, the release build is unsigned.
+
+### The website, if you do not want the APK
 
 1. Open the Pages URL in **Chrome**.
-2. Tap the menu (⋮) → **Add to Home screen** or **Install app**. If the browser offers an install prompt, Still also shows **Add to Home screen** in Settings.
-3. Open Still from the new icon. It runs full screen and works offline after that first online visit.
-4. Allow notifications when Still asks, or later in Settings.
+2. Tap the menu (⋮) → **Add to Home screen** or **Install app**.
+3. Allow notifications when Still asks.
 
-iPhone: Safari → Share → **Add to Home Screen**. iOS is stricter about background notifications than Chrome on Android; the morning list still appears when you open the app.
+That installed site cannot draw a real home-screen widget, and Android will not reliably wake it after you swipe it away. Long-press the icon for the shortcut stand-ins **Add task** and **Speak task**.
 
-### Home-screen shortcuts
-
-Long-press the Still icon. Chrome shows two shortcuts from the manifest:
-
-- **Add task** opens the composer.
-- **Speak task** opens the composer and starts the microphone when the browser still treats that as a tap. If it doesn’t, one more tap on the mic starts listening.
-
-You can also share a line of text to Still from another app. The shared sentence is filled in as a new task and parsed on the phone.
-
-### A real Android widget
-
-A website cannot draw a true Android home-screen widget. The shortcuts above are the web stand-in.
-
-If you later want a real widget:
-
-- **Trusted Web Activity.** Wrap the Pages URL with [Bubblewrap](https://github.com/GoogleChromeLabs/bubblewrap). Add a small native widget whose only job is to open `https://<your-pages-url>/?action=add` or `?action=speak`.
-- **Capacitor.** Point a Capacitor Android project at the `dist/` folder and add an App Widget that launches the same URLs.
-
-Either path is a native shell around this same static app. Still itself stays a website with no backend.
-
-## Reminders, and what a static app cannot do
+## Reminders
 
 Still schedules three kinds of reminder for a task, and you can turn each one off:
 
@@ -75,12 +120,13 @@ What actually fires:
 
 | Situation | What happens |
 | --- | --- |
-| Still is open, or sitting in a recent Chrome tab | A timer in the page checks the list and posts a notification. This is the reliable path. |
-| The browser supports [Notification Triggers](https://developer.mozilla.org/en-US/docs/Web/API/Notification_Triggers) (`TimestampTrigger`) | Still asks the phone to show the notification at that exact time, even if the app is closed. Support is uncommon; Settings tells you if this browser has it. |
-| Periodic Background Sync is allowed | Chrome may wake the service worker on a coarse interval (often 12 hours or longer, and only for an installed app you use). It is not an alarm clock. |
-| The app is fully closed and the browser can’t schedule a time | The reminder waits. The next time you open Still, it shows anything you missed in the last 12 hours, and the morning list if it’s still morning. |
+| The Android app is installed, notifications are allowed, and exact alarms are allowed | Still schedules the reminder on the phone. It can ring when the app is closed or the screen is off. Opening Still later still shows anything from the last 12 hours. |
+| Still is open in the browser, or sitting in a recent Chrome tab | A timer in the page checks the list and posts a notification. This is the reliable path for the website. |
+| The browser supports Notification Triggers (`TimestampTrigger`) | Still asks the phone to show the notification at that exact time, even if the site is closed. Support is uncommon. |
+| Periodic Background Sync is allowed | Chrome may wake the service worker on a coarse interval. It is not an alarm clock. |
+| The website is fully closed and the browser can’t schedule a time | The reminder waits until you open Still. |
 
-There is no push server, on purpose. A static site cannot receive Web Push. Android will not reliably wake a closed browser tab. **Open Still in the morning.** That daily list is the dependable one: overdue items and anything due today, once a day between the hour you pick (default 7:00) and noon.
+There is no push server. The website cannot receive Web Push, and Android will not reliably wake a closed browser tab. The Android app does not need a server: the alarm is local. The morning list still appears when you open Still, once a day between the hour you pick (default 7:00) and noon.
 
 Notifications are generic by default (“A task is due in about an hour.”). Task names stay inside the encrypted vault. **Show task names** in Settings puts the title on the lock screen and stores it in a separate reminder list the service worker can read. Leave it off if the lock screen isn’t a place you want the title.
 
@@ -93,7 +139,8 @@ Enable notifications: when you add your first task, or in Settings → Reminders
 - Auto-lock defaults to 5 minutes of inactivity, and also if you leave the app that long. Reloading the page drops the key, so you enter the PIN again. Choose 1 minute, 15 minutes, or off in Settings.
 - After several wrong PINs the pad waits, so guessing by hand is slow. A copied browser profile can still be attacked offline; a long passphrase is stronger than `1234`.
 - No analytics, no accounts, no third-party scripts. The production build sets a strict Content-Security-Policy (and the service worker repeats it as a header, including `frame-ancestors`, which a meta tag cannot enforce).
-- **Voice is the exception.** Speech recognition is the browser’s own service. In Chrome that usually sends the audio of that phrase to Google and returns text. Still stores only the text, on the phone. The disclosure sits on the add screen. Type the task if you don’t want that.
+- **Voice is the exception.** In the browser, speech recognition is Chrome’s service and may send that phrase to Google. In the Android app, the phone’s speech recognizer is used, and that may also send the phrase to its speech service. Still stores only the text. The disclosure sits on the add screen. Type the task if you don’t want that.
+- The Android home-screen widget stores one line outside the vault so it can draw while Still is locked. The task name is included only if **Show task names** is on.
 - Encrypted backup: Settings → Download encrypted backup. The file is useless without the PIN that was set when you exported it. Restore replaces the list on this phone.
 - Readable copy: explicitly labeled as not encrypted.
 - Forgetting the PIN means the tasks cannot be read. Erase the vault and start over. Erase deletes the local database; it is not a remote wipe.
@@ -109,10 +156,11 @@ The timer is a simple focus block (15, 25, or 50 minutes) and a short break. It 
 ## Develop
 
 ```bash
-npm test          # date parser, reminder times, encryption
-npm run dev       # http://127.0.0.1:47321
-npm run icons     # redraw the PNG icons
-npm run build     # dist/ for GitHub Pages
+npm test             # date parser, reminder times, encryption, widget copy
+npm run dev          # http://127.0.0.1:47321
+npm run icons        # redraw the PNG icons
+npm run build        # dist/ for GitHub Pages and the Android shell
+npm run android:debug
 ```
 
-The service worker is registered only in the production build, because the dev server’s live reload does not belong in the app cache. `public/sw.js` has `__CACHE__` and `__PRECACHE__` placeholders that the build fills in.
+The service worker is registered only in the production website, not inside the Android app. `public/sw.js` has `__CACHE__` and `__PRECACHE__` placeholders that the build fills in. `android/local.properties` points at your Android SDK and is not committed.

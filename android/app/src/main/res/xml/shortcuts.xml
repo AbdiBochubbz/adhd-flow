@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:shortcutId="add"
+        android:shortcutLongLabel="@string/shortcut_add"
+        android:shortcutShortLabel="@string/shortcut_add">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="still://add"
+            android:targetClass="app.still.tasks.MainActivity"
+            android:targetPackage="app.still.tasks" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:shortcutId="speak"
+        android:shortcutLongLabel="@string/shortcut_speak"
+        android:shortcutShortLabel="@string/shortcut_speak">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="still://speak"
+            android:targetClass="app.still.tasks.MainActivity"
+            android:targetPackage="app.still.tasks" />
+    </shortcut>
+</shortcuts>

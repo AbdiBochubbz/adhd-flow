@@ -1,5 +1,7 @@
+import { chibiFigure } from "./chibi.js";
 import { draftFrom, previewCopy } from "./draft.js";
 import { h, icon, svg } from "./dom.js";
+import { CHIBIS, SEAT_COUNT } from "./room.js";
 import { SUBJECTS, firstOpenStep, groupTasks, nextTask, urgencyOf } from "./model.js";
 import { REMINDER_LABELS, slotsForTask } from "./reminders.js";
 import { formatClock, formatDistance, formatDue, formatShortDay, formatTime, toDatetimeLocal } from "./time.js";
@@ -104,7 +106,9 @@ function addSheet(state, now) {
       h(
         "p",
         { class: "fine" },
-        "Voice uses your browser’s speech service. In Chrome, that may send this phrase to Google. Still keeps only the text, on this phone.",
+        state.native
+          ? "Voice uses this phone’s speech recognizer. It may send the phrase to that service. Still keeps only the text, on this phone."
+          : "Voice uses your browser’s speech service. In Chrome, that may send this phrase to Google. Still keeps only the text, on this phone.",
       ),
       h(
         "div",
@@ -732,26 +736,40 @@ function settingsView(state) {
           "span",
           {},
           h("strong", {}, "Show task names"),
-          h("small", {}, "Names then appear on the lock screen, outside the encrypted vault."),
+          h(
+            "small",
+            {},
+            state.native
+              ? "Names then appear on the lock screen and the home-screen widget, outside the encrypted vault."
+              : "Names then appear on the lock screen, outside the encrypted vault.",
+          ),
         ),
         h("span", { class: "switch", "aria-hidden": "true" }),
       ),
-      h("p", {}, "While Still is open, it checks the list and can notify you. That part is reliable."),
-      h(
-        "p",
-        {},
-        caps.timestampTrigger
-          ? "This browser offers scheduled notifications, so Still asks it to ring at the exact time even if you leave the app."
-          : "This browser cannot schedule an exact alarm for a closed site. A reminder waits until you open Still.",
-      ),
-      h(
-        "p",
-        {},
-        caps.periodicSync
-          ? "Periodic background sync exists here. Chrome still decides when it runs — often every 12 hours or less, and only for an installed app you actually use. It is not an alarm clock."
-          : "Periodic background sync isn’t available. Still can’t ask the phone to wake a closed site on a timer.",
-      ),
-      h("p", {}, "A static app has no push server. Android will not reliably wake a website that is fully closed. The dependable habit is to open Still in the morning."),
+      state.native
+        ? h("p", {}, "This Android app puts reminders on the phone’s alarm clock. They can ring when Still is closed, including overnight, once notifications and Alarms & reminders are allowed.")
+        : h("p", {}, "While Still is open, it checks the list and can notify you. That part is reliable."),
+      state.native
+        ? null
+        : h(
+            "p",
+            {},
+            caps.timestampTrigger
+              ? "This browser offers scheduled notifications, so Still asks it to ring at the exact time even if you leave the app."
+              : "This browser cannot schedule an exact alarm for a closed site. A reminder waits until you open Still.",
+          ),
+      state.native
+        ? null
+        : h(
+            "p",
+            {},
+            caps.periodicSync
+              ? "Periodic background sync exists here. Chrome still decides when it runs — often every 12 hours or less, and only for an installed app you actually use. It is not an alarm clock."
+              : "Periodic background sync isn’t available. Still can’t ask the phone to wake a closed site on a timer.",
+          ),
+      state.native
+        ? h("p", {}, "There is still no account and no server. The home-screen widget can add a task. It shows the task name only when Show task names is on.")
+        : h("p", {}, "A static app has no push server. Android will not reliably wake a website that is fully closed. The dependable habit is to open Still in the morning."),
       state.background?.periodic ? h("p", { class: "fine" }, "Background check: registered.") : null,
       state.swError ? h("p", { class: "fine" }, "The offline worker didn’t start. The list still saves on this phone.") : null,
     ),
@@ -939,6 +957,178 @@ function currentSheet(state, now) {
   return null;
 }
 
+function roomView(state) {
+  const room = state.room;
+  if (room.current) return classroom(room);
+  return h(
+    "section",
+    { class: "room-setup" },
+    h("p", { class: "view-kicker" }, "Study room"),
+    h("h2", { class: "room-title" }, "Sit with people, not with your list."),
+    h("p", { class: "help" }, "Only your name, look, and seat are shared. Tasks stay on this phone."),
+    h("label", { class: "field-label", for: "room-name" }, "Your name"),
+    h("input", { id: "room-name", class: "field", maxlength: "24", value: room.displayName, placeholder: "What should the room call you?" }),
+    h("p", { class: "field-label" }, "Your look"),
+    h(
+      "div",
+      { class: "chibi-row", role: "listbox", "aria-label": "Look" },
+      CHIBIS.map((look) =>
+        h(
+          "button",
+          {
+            class: room.chibi === look.id ? "chibi-pick is-on" : "chibi-pick",
+            "aria-pressed": room.chibi === look.id ? "true" : "false",
+            "aria-label": look.label,
+            dataset: { action: "room-chibi", id: look.id },
+          },
+          chibiFigure(look.id),
+          h("span", {}, look.label),
+        ),
+      ),
+    ),
+    h(
+      "div",
+      { class: "segment", role: "group", "aria-label": "How to join" },
+      [
+        ["public", "Public"],
+        ["code", "Code"],
+        ["create", "Create"],
+      ].map(([id, label]) =>
+        h(
+          "button",
+          {
+            class: room.mode === id ? "is-on" : "",
+            "aria-pressed": room.mode === id ? "true" : "false",
+            dataset: { action: "room-mode", value: id },
+          },
+          label,
+        ),
+      ),
+    ),
+    room.mode === "public" ? publicRooms(room) : room.mode === "code" ? codeJoin(room) : createRoom(room),
+    h("label", { class: "field-label", for: "room-server" }, "Shared server"),
+    h("input", {
+      id: "room-server",
+      class: "field",
+      value: room.serverUrl,
+      placeholder: "wss://example.com  ·  blank stays on this device",
+      spellcheck: "false",
+      autocapitalize: "off",
+    }),
+    h(
+      "button",
+      { class: "btn-ghost", dataset: { action: "room-server" } },
+      room.serverUrl.trim() ? "Use this server" : "Keep rooms on this device",
+    ),
+    h(
+      "p",
+      { class: "fine" },
+      room.modeLabel === "server"
+        ? "Public rooms, codes, and invite links are shared through that server. It never receives your tasks."
+        : "With no server, those three ways to join work on this device only. Add a server address when another phone should see the room.",
+    ),
+    room.error ? h("p", { class: "error" }, room.error) : null,
+  );
+}
+
+function publicRooms(room) {
+  return h(
+    "div",
+    { class: "stack" },
+    h(
+      "button",
+      { class: "btn-quiet", dataset: { action: "room-refresh" } },
+      room.status === "connecting" ? "Looking…" : "Refresh public rooms",
+    ),
+    room.rooms.length
+      ? room.rooms.map((item) =>
+          h(
+            "button",
+            { class: "room-card", dataset: { action: "room-join", code: item.code } },
+            h("strong", {}, item.name),
+            h("span", {}, `${item.count} here · ${item.code}`),
+          ),
+        )
+      : h("p", { class: "help" }, "No public rooms yet. Create one, or join with a code."),
+  );
+}
+
+function codeJoin(room) {
+  return h(
+    "div",
+    { class: "stack" },
+    h("label", { class: "field-label", for: "room-code" }, "Room code"),
+    h("input", { id: "room-code", class: "field", maxlength: "8", value: room.codeInput, placeholder: "AB23CD", autocapitalize: "characters" }),
+    h("button", { class: "btn-primary", dataset: { action: "room-join" } }, "Join with code"),
+  );
+}
+
+function createRoom(room) {
+  return h(
+    "div",
+    { class: "stack" },
+    h("label", { class: "field-label", for: "room-title" }, "Room name"),
+    h("input", { id: "room-title", class: "field", maxlength: "40", value: room.roomName, placeholder: "Afternoon study" }),
+    h(
+      "button",
+      {
+        class: "toggle-row",
+        "aria-pressed": room.isPublic ? "true" : "false",
+        dataset: { action: "room-public" },
+      },
+      h("span", {}, h("strong", {}, "Public room"), h("small", {}, "Shows up in the public list. A private room is code and invite only.")),
+      h("span", { class: "switch", "aria-hidden": "true" }),
+    ),
+    h("button", { class: "btn-primary", dataset: { action: "room-create" } }, "Create room"),
+  );
+}
+
+function classroom(room) {
+  const current = room.current;
+  const members = current.members || [];
+  const seats = Array.from({ length: SEAT_COUNT }, (_, seat) => members.find((member) => member.seat === seat) || null);
+  return h(
+    "section",
+    { class: "classroom" },
+    h(
+      "div",
+      { class: "class-windows", "aria-hidden": "true" },
+      h("span", { class: "window" }),
+      h("span", { class: "window" }),
+      h("span", { class: "window" }),
+    ),
+    h(
+      "div",
+      { class: "class-board" },
+      h("p", {}, current.name),
+      h("p", { class: "board-note" }, "One thing, then the next."),
+    ),
+    h(
+      "div",
+      { class: "desk-grid" },
+      seats.map((member, seat) =>
+        h(
+          "button",
+          {
+            class: member ? (member.id === room.you?.id ? "desk is-mine" : "desk is-taken") : "desk",
+            dataset: { action: "room-seat", seat: String(seat) },
+            "aria-label": member ? `${member.displayName}, seat ${seat + 1}` : `Empty seat ${seat + 1}`,
+          },
+          member ? chibiFigure(member.chibi) : h("span", { class: "desk-empty" }, "Sit"),
+          h("span", { class: "desk-name" }, member ? member.displayName : ""),
+        ),
+      ),
+    ),
+    h(
+      "div",
+      { class: "room-bar" },
+      h("p", {}, h("strong", {}, current.code), " · ", room.invite),
+      h("button", { class: "btn-ghost", dataset: { action: "room-copy" } }, "Copy invite link"),
+      h("button", { class: "btn-quiet", dataset: { action: "room-leave" } }, "Leave the room"),
+    ),
+  );
+}
+
 export function renderScreen(state) {
   const now = new Date();
   if (state.screen === "error") {
@@ -965,7 +1155,15 @@ export function renderScreen(state) {
   }
 
   const view =
-    state.view === "tasks" ? tasksView(state, now) : state.view === "timer" ? timerView(state, now) : state.view === "settings" ? settingsView(state) : focusView(state, now);
+    state.view === "tasks"
+      ? tasksView(state, now)
+      : state.view === "timer"
+        ? timerView(state, now)
+        : state.view === "settings"
+          ? settingsView(state)
+          : state.view === "room"
+            ? roomView(state)
+            : focusView(state, now);
   const showFab = state.view === "focus" || state.view === "tasks";
   const overdue = state.tasks.filter((task) => !task.completedAt && task.dueAt < now.getTime()).length;
 
@@ -1011,6 +1209,7 @@ export function renderScreen(state) {
       [
         ["focus", "Focus", "focus"],
         ["tasks", "Tasks", "list"],
+        ["room", "Room", "room"],
         ["timer", "Timer", "timer"],
         ["settings", "Settings", "settings"],
       ].map(([id, label, glyph]) =>

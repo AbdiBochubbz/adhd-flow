@@ -1,4 +1,5 @@
 import { scheduleAll, scheduleReplace, setNotifTitles } from "./db.js";
+import { isNative, nativePermissionState, prepareNativeNotifications, publishWidget, requestNativeNotifications, scheduleNativeAlarms } from "./native.js";
 import { catchUpGrace, planSchedule } from "./reminders.js";
 
 let capabilities = {
@@ -54,6 +55,12 @@ export async function probeCapabilities() {
     notification: typeof Notification !== "undefined",
     serviceWorker: "serviceWorker" in navigator,
   };
+  if (isNative()) {
+    await prepareNativeNotifications();
+    capabilities.notification = true;
+    capabilities.nativeAlarms = true;
+    capabilities.timestampTrigger = nativePermissionState() === "granted";
+  }
   const reported = await callSW({ type: "CAPABILITIES" });
   if (reported) {
     capabilities.timestampTrigger = Boolean(reported.timestampTrigger);
@@ -65,11 +72,13 @@ export async function probeCapabilities() {
 }
 
 export function permissionState() {
+  if (isNative()) return nativePermissionState();
   if (typeof Notification === "undefined") return "unsupported";
   return Notification.permission;
 }
 
 export async function askNotificationPermission() {
+  if (isNative()) return requestNativeNotifications();
   if (typeof Notification === "undefined") return "unsupported";
   if (Notification.permission !== "default") return Notification.permission;
   try {
@@ -177,8 +186,22 @@ export function syncSchedule(tasks, settings, hooks) {
     });
     planned.sort((a, b) => a.at - b.at);
     await scheduleReplace(planned);
-    await armTriggers(planned);
+    const nativeOk = await scheduleNativeAlarms(planned);
+    if (nativeOk) {
+      const now = Date.now();
+      let marked = false;
+      for (const slot of planned) {
+        if (!slot.shown && slot.at > now && !slot.triggerSet) {
+          slot.triggerSet = true;
+          marked = true;
+        }
+      }
+      if (marked) await scheduleReplace(planned);
+    } else {
+      await armTriggers(planned);
+    }
     armForeground(hooks);
+    await publishWidget(tasks, settings);
   });
 }
 

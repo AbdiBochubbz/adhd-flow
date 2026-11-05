@@ -14,6 +14,9 @@ import {
   syncSchedule,
   updateBadge,
 } from "./notify.js";
+import { clearWidget, isNative, nativeActionFromUrl, startNativeListening, watchNativeLinks } from "./native.js";
+import { connectPresence } from "./presence.js";
+import { inviteLink } from "./room.js";
 import { dayKey, endOfDay, formatClock, fromDatetimeLocal } from "./time.js";
 import { parseTask } from "./parse.js";
 import {
@@ -66,12 +69,32 @@ const state = {
   pendingAction: null,
   pendingTask: null,
   pendingText: "",
+  pendingRoom: "",
+  room: {
+    serverUrl: "",
+    status: "idle",
+    error: "",
+    mode: "public",
+    modeLabel: "local",
+    displayName: "",
+    chibi: "pebbles",
+    codeInput: "",
+    roomName: "",
+    isPublic: true,
+    rooms: [],
+    roomsJson: "",
+    roomJson: "",
+    current: null,
+    you: null,
+    invite: "",
+  },
   focusComposer: false,
   installPrompt: null,
   updateReady: false,
   swError: false,
   online: navigator.onLine,
   standalone: false,
+  native: isNative(),
   notificationPermission: "default",
   caps: null,
   background: null,
@@ -240,7 +263,7 @@ function nextPhrase() {
 function refreshPermission() {
   state.notificationPermission = permissionState();
   state.caps = { ...getCapabilities(), ...(state.caps || {}) };
-  state.standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  state.standalone = state.native || window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
 }
 
 function secretNow() {
@@ -264,18 +287,11 @@ function haltVoice() {
 }
 
 function beginVoice() {
-  if (!speechSupported()) {
-    state.voiceError = voiceErrorCopy("unsupported");
-    state.sheet = "add";
-    state.listening = false;
-    render();
-    return;
-  }
   haltVoice();
   state.listening = true;
   state.voiceError = "";
   state.sheet = "add";
-  stopVoice = startListening({
+  const handlers = {
     onText(text) {
       state.composer.text = text;
       state.live = text;
@@ -283,6 +299,10 @@ function beginVoice() {
     },
     onError(code) {
       if (code === "aborted") return;
+      if (code === "unsupported" && state.native && speechSupported()) {
+        stopVoice = startListening(handlers);
+        return;
+      }
       state.voiceError = voiceErrorCopy(code);
       state.listening = false;
       render();
@@ -291,7 +311,12 @@ function beginVoice() {
       state.listening = false;
       if (state.sheet === "add") render();
     },
-  });
+  };
+  if (state.native) stopVoice = startNativeListening(handlers);
+  else if (!speechSupported()) {
+    state.voiceError = voiceErrorCopy("unsupported");
+    state.listening = false;
+  } else stopVoice = startListening(handlers);
   render();
 }
 
@@ -475,9 +500,11 @@ function applyPending() {
   const action = state.pendingAction;
   const taskId = state.pendingTask;
   const text = state.pendingText;
+  const roomCode = state.pendingRoom;
   state.pendingAction = null;
   state.pendingTask = null;
   state.pendingText = "";
+  state.pendingRoom = "";
   if (action === "speak") {
     openAdd({ voice: true, text });
     return true;
@@ -488,6 +515,10 @@ function applyPending() {
   }
   if (taskId) {
     openTask(taskId);
+    return true;
+  }
+  if (roomCode) {
+    openRoomCode(roomCode);
     return true;
   }
   return false;
@@ -628,6 +659,7 @@ async function eraseEverything() {
     /* the vault is about to be removed */
   }
   await eraseVault();
+  clearWidget();
   state.key = null;
   state.tasks = [];
   state.hasVault = false;
@@ -942,6 +974,83 @@ function onClick(event) {
   if (action === "nav") {
     state.view = button.dataset.view;
     refreshPermission();
+    if (state.view === "room") ensurePresence();
+    render();
+    return;
+  }
+  if (action === "room-mode") {
+    state.room.mode = button.dataset.value;
+    render();
+    return;
+  }
+  if (action === "room-chibi") {
+    state.room.chibi = button.dataset.id;
+    rememberRoomProfile();
+    render();
+    return;
+  }
+  if (action === "room-public") {
+    state.room.isPublic = !state.room.isPublic;
+    render();
+    return;
+  }
+  if (action === "room-refresh") {
+    ensurePresence().list();
+    return;
+  }
+  if (action === "room-create") {
+    rememberRoomProfile();
+    const result = ensurePresence().create({
+      name: state.room.roomName,
+      public: state.room.isPublic,
+      displayName: state.room.displayName,
+      chibi: state.room.chibi,
+      seat: 0,
+    });
+    if (result?.ok === false) {
+      state.room.error = result.error;
+      render();
+    }
+    return;
+  }
+  if (action === "room-join") {
+    joinRoom(button.dataset.code || state.room.codeInput);
+    return;
+  }
+  if (action === "room-seat") {
+    const result = ensurePresence().move(Number(button.dataset.seat));
+    if (result?.ok === false) {
+      state.room.error = result.error;
+      render();
+    }
+    return;
+  }
+  if (action === "room-leave") {
+    ensurePresence().leave();
+    state.room.current = null;
+    state.room.you = null;
+    state.room.invite = "";
+    state.room.roomJson = "";
+    ensurePresence().list();
+    render();
+    return;
+  }
+  if (action === "room-copy") {
+    const link = state.room.invite;
+    navigator.clipboard?.writeText(link).then(() => showToast("Invite link copied.")).catch(() => showToast(link));
+    return;
+  }
+  if (action === "room-server") {
+    try {
+      localStorage.setItem("still-room-server", state.room.serverUrl.trim());
+    } catch {
+      /* ignore */
+    }
+    presenceHandle?.close();
+    presenceHandle = null;
+    state.room.current = null;
+    state.room.you = null;
+    ensurePresence();
     render();
     return;
   }
@@ -1246,6 +1355,10 @@ function onInput(event) {
   if (target.id === "new-pin") state.changeA = target.value;
   if (target.id === "new-pin-2") state.changeB = target.value;
   if (target.id === "import-pin") state.importPin = target.value;
+  if (target.id === "room-name") state.room.displayName = target.value;
+  if (target.id === "room-title") state.room.roomName = target.value;
+  if (target.id === "room-code") state.room.codeInput = target.value;
+  if (target.id === "room-server") state.room.serverUrl = target.value;
 }
 
 function onChange(event) {
@@ -1366,17 +1479,114 @@ function watchLock() {
   if (Date.now() - state.lastActivity >= minutes * 60 * 1000) lock();
 }
 
+let presenceHandle = null;
+
+function hydrateRoom() {
+  try {
+    state.room.displayName = localStorage.getItem("still-display-name") || "";
+    state.room.chibi = localStorage.getItem("still-chibi") || "pebbles";
+    state.room.serverUrl = localStorage.getItem("still-room-server") || "";
+  } catch {
+    /* private mode can refuse storage that isn't IndexedDB */
+  }
+}
+
+function rememberRoomProfile() {
+  try {
+    localStorage.setItem("still-display-name", state.room.displayName.trim());
+    localStorage.setItem("still-chibi", state.room.chibi);
+  } catch {
+    /* ignore */
+  }
+}
+
+function ensurePresence() {
+  const url = state.room.serverUrl.trim();
+  const key = url || "local";
+  if (presenceHandle && presenceHandle.key === key) return presenceHandle;
+  presenceHandle?.close();
+  presenceHandle = connectPresence(key, {
+    onStatus(status, error) {
+      const errorText = error || "";
+      const changed = state.room.status !== status || state.room.error !== errorText;
+      state.room.status = status;
+      state.room.modeLabel = presenceHandle?.mode || "local";
+      state.room.error = errorText;
+      if (changed && state.view === "room" && state.screen === "app") render();
+    },
+    onRooms(rooms) {
+      const next = JSON.stringify(rooms);
+      state.room.rooms = rooms;
+      if (next === state.room.roomsJson) return;
+      state.room.roomsJson = next;
+      if (state.view === "room" && state.screen === "app" && !state.room.current) render();
+    },
+    onRoom(room, you) {
+      const next = room ? JSON.stringify(room.members) : "";
+      state.room.current = room;
+      state.room.you = you;
+      state.room.invite = room ? inviteLink(room.code, location.href) : "";
+      if (next === state.room.roomJson && room) return;
+      state.room.roomJson = next;
+      if (state.view === "room" && state.screen === "app") render();
+    },
+  });
+  state.room.modeLabel = presenceHandle.mode;
+  return presenceHandle;
+}
+
+function joinRoom(code) {
+  rememberRoomProfile();
+  const result = ensurePresence().join({
+    code,
+    displayName: state.room.displayName,
+    chibi: state.room.chibi,
+    seat: 0,
+  });
+  if (result?.ok === false) {
+    state.room.error = result.error;
+    render();
+  }
+}
+
+function openRoomCode(code) {
+  state.view = "room";
+  state.room.mode = "code";
+  state.room.codeInput = code;
+  ensurePresence();
+  if (state.room.displayName.trim()) {
+    const result = ensurePresence().join({
+      code,
+      displayName: state.room.displayName,
+      chibi: state.room.chibi,
+      seat: 0,
+    });
+    if (result?.ok === false) state.room.error = result.error;
+  }
+  render();
+}
+
 function readLaunch() {
   const params = new URLSearchParams(location.search);
   state.pendingAction = params.get("action");
   state.pendingTask = params.get("task");
   state.pendingText = (params.get("text") || params.get("title") || "").trim();
+  state.pendingRoom = params.get("room") || "";
   if (!state.pendingAction && state.pendingText) state.pendingAction = "add";
   if ([...params.keys()].length) history.replaceState({}, "", location.pathname);
 }
 
+function applyNativeUrl(url) {
+  const parsed = nativeActionFromUrl(url);
+  if (!parsed) return;
+  if (parsed.action) state.pendingAction = parsed.action;
+  if (parsed.task) state.pendingTask = parsed.task;
+  if (parsed.room) state.pendingRoom = parsed.room;
+  if (state.screen === "app") applyPending();
+}
+
 function registerServiceWorker() {
-  if (!import.meta.env.PROD || !("serviceWorker" in navigator)) return;
+  if (state.native || !import.meta.env.PROD || !("serviceWorker" in navigator)) return;
   const swUrl = new URL("sw.js", document.baseURI).href;
   const scope = new URL("./", document.baseURI).href;
   navigator.serviceWorker.register(swUrl, { scope }).then((registration) => {
@@ -1401,6 +1611,8 @@ function registerServiceWorker() {
 
 async function boot() {
   readLaunch();
+  hydrateRoom();
+  if (state.native) watchNativeLinks(applyNativeUrl);
   applyTheme(localStorage.getItem("still-theme") || "system");
   state.online = navigator.onLine;
   refreshPermission();

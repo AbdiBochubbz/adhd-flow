@@ -3,3 +3,11 @@ dist
 .DS_Store
 *.log
 .vite
+*.keystore
+*.jks
+keystore.properties
+android/local.properties
+android/.gradle
+android/build
+android/app/build
+android/captures

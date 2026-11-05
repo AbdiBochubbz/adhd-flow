@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Still</string>
+    <string name="title_activity_main">Still</string>
+    <string name="package_name">app.still.tasks</string>
+    <string name="custom_url_scheme">app.still.tasks</string>
+    <string name="widget_name">Still</string>
+    <string name="widget_description">The next school task, and a way to add one.</string>
+    <string name="shortcut_add">Add task</string>
+    <string name="shortcut_speak">Speak task</string>
+</resources>
