@@ -11,7 +11,7 @@ const CSP = [
   "script-src 'self'",
   "style-src 'self'",
   "img-src 'self' data:",
-  "connect-src 'self' https://www.google.com https://*.google.com https://*.googleapis.com wss://www.google.com wss://*.google.com",
+  "connect-src 'self' ws: wss: http: https: https://www.google.com https://*.google.com https://*.googleapis.com wss://www.google.com wss://*.google.com",
   "worker-src 'self'",
   "manifest-src 'self'",
   "font-src 'self'",

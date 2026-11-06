@@ -100,6 +100,25 @@ cd android
 
 `assembleRelease` writes `android/app/build/outputs/apk/release/app-release.apk`. `bundleRelease` writes an `.aab` under `android/app/build/outputs/bundle/release/` for Play App Signing. If `keystore.properties` is missing, the release build is unsigned.
 
+## Install on Windows
+
+Still on a laptop is the same app: PIN, encrypted tasks, the hallway and classroom, and lighting that follows the clock. It is a portable program. There is no installer account and nothing is sent to a server.
+
+1. Copy `Still.exe` onto the laptop.
+2. Double-click it. Windows SmartScreen may say the publisher is unknown, because the file is not signed with a paid certificate. Choose **More info**, then **Run anyway**.
+3. Still opens in its own window. The list is stored on that Windows user account, in the app’s local data, encrypted with the PIN you choose.
+
+Reminders on the desktop fire while Still is open, including when the window is in the background. Closing the window quits the app, so a reminder cannot ring after you exit. Open Still when you want the morning list. The Android app is the one that can ring while it is fully closed.
+
+Build it yourself from PowerShell or WSL, after Node.js is installed:
+
+```bash
+npm install
+npm run desktop:win
+```
+
+The portable program is written to `desktop-dist/`. On Windows the file name looks like `Still 1.0.0.exe`.
+
 ### The website, if you do not want the APK
 
 1. Open the Pages URL in **Chrome**.
@@ -123,6 +142,7 @@ What actually fires:
 | Situation | What happens |
 | --- | --- |
 | The Android app is installed, notifications are allowed, and exact alarms are allowed | Still schedules the reminder on the phone. It can ring when the app is closed or the screen is off. Opening Still later still shows anything from the last 12 hours. |
+| The Windows app is open, even if the window is behind another program | The same on-screen timer can post a Windows notification. Quit Still and the timer stops until you open it again. |
 | Still is open in the browser, or sitting in a recent Chrome tab | A timer in the page checks the list and posts a notification. This is the reliable path for the website. |
 | The browser supports Notification Triggers (`TimestampTrigger`) | Still asks the phone to show the notification at that exact time, even if the site is closed. Support is uncommon. |
 | Periodic Background Sync is allowed | Chrome may wake the service worker on a coarse interval. It is not an alarm clock. |

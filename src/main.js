@@ -1649,7 +1649,7 @@ function applyNativeUrl(url) {
 }
 
 function registerServiceWorker() {
-  if (state.native || !import.meta.env.PROD || !("serviceWorker" in navigator)) return;
+  if (state.native || navigator.userAgent.includes("Electron") || !import.meta.env.PROD || !("serviceWorker" in navigator)) return;
   const swUrl = new URL("sw.js", document.baseURI).href;
   const scope = new URL("./", document.baseURI).href;
   navigator.serviceWorker.register(swUrl, { scope }).then((registration) => {
