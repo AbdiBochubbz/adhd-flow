@@ -1,4 +1,4 @@
-import { firstFreeSeat, gcRooms, listPublic, makeRoomCode, normalizeCode, sanitizeMember, sanitizeName } from "./room.js";
+import { assignSeat, firstFreeSeat, gcRooms, listPublic, makeRoomCode, normalizeCode, sanitizeMember, sanitizeName } from "./room.js";
 
 const STORE_KEY = "still-rooms-v1";
 const CHANNEL = "still-rooms-v1";
@@ -266,12 +266,9 @@ function moveLocal(memberId, seat) {
   const rooms = readRooms();
   const found = findMembership(rooms, memberId);
   if (!found) return { ok: false, error: "Join a room first." };
-  const others = found.room.members.filter((member) => member.id !== memberId);
-  if (others.some((member) => member.seat === seat)) return { ok: false, error: "Someone is already in that seat." };
-  const profile = sanitizeMember({ ...found.member, seat });
-  if (!profile) return { ok: false, error: "That seat is not in this room." };
-  found.member.seat = seat;
-  found.member.seen = Date.now();
+  const moved = assignSeat(found.room.members, memberId, seat);
+  if (!moved.ok) return moved;
+  found.room.members = moved.members;
   writeRooms(rooms);
   return { ok: true };
 }

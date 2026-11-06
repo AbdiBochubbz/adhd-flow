@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
-import { firstFreeSeat, makeRoomCode, normalizeCode, sanitizeMember, sanitizeName, SEAT_COUNT } from "../src/room.js";
+import { assignSeat, firstFreeSeat, makeRoomCode, normalizeCode, sanitizeMember, sanitizeName } from "../src/room.js";
 
 const port = Number(process.env.PRESENCE_PORT || 47322);
 const rooms = new Map();
@@ -93,13 +93,10 @@ function joinRoom(socket, message) {
 function moveSeat(socket, seat) {
   const session = sockets.get(socket);
   const room = rooms.get(session?.code);
-  const member = room?.members.get(session?.memberId);
-  if (!member) return fail(socket, "Join a room first.");
-  if (!Number.isInteger(seat) || seat < 0 || seat >= SEAT_COUNT) return fail(socket, "That seat is not in this room.");
-  for (const other of room.members.values()) {
-    if (other.id !== member.id && other.seat === seat) return fail(socket, "Someone is already in that seat.");
-  }
-  member.seat = seat;
+  if (!room?.members.has(session?.memberId)) return fail(socket, "Join a room first.");
+  const moved = assignSeat([...room.members.values()], session.memberId, seat);
+  if (!moved.ok) return fail(socket, moved.error);
+  room.members = new Map(moved.members.map((member) => [member.id, member]));
   broadcast(room);
 }
 

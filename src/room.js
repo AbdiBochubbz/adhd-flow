@@ -46,6 +46,23 @@ export function sanitizeMember(raw) {
   return { displayName, chibi, seat, focusing: Boolean(raw?.focusing) };
 }
 
+/** One person, one seat. Leaving a desk frees it, including the desk you just left. */
+export function assignSeat(members, memberId, seat) {
+  const target = Number(seat);
+  if (!Number.isInteger(target) || target < 0 || target >= SEAT_COUNT) {
+    return { ok: false, error: "That seat is not in this room." };
+  }
+  const mine = (members || []).filter((member) => member.id === memberId);
+  if (!mine.length) return { ok: false, error: "Join a room first." };
+  const taken = (members || []).some((member) => member.id !== memberId && Number(member.seat) === target);
+  if (taken) return { ok: false, error: "Someone is already in that seat." };
+  const profile = sanitizeMember({ ...mine[mine.length - 1], seat: target });
+  if (!profile) return { ok: false, error: "That seat is not in this room." };
+  const next = (members || []).filter((member) => member.id !== memberId);
+  next.push({ ...mine[mine.length - 1], id: memberId, ...profile, seen: Date.now() });
+  return { ok: true, members: next, seat: target };
+}
+
 export function firstFreeSeat(members, preferred) {
   const taken = new Set((members || []).map((member) => member.seat));
   if (Number.isInteger(preferred) && preferred >= 0 && preferred < SEAT_COUNT && !taken.has(preferred)) return preferred;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { firstFreeSeat, inviteLink, listPublic, makeRoomCode, normalizeCode, roomCodeFromUrl, sanitizeMember } from "../src/room.js";
+import { assignSeat, firstFreeSeat, inviteLink, listPublic, makeRoomCode, normalizeCode, roomCodeFromUrl, sanitizeMember } from "../src/room.js";
 
 test("room codes avoid ambiguous characters", () => {
   const code = makeRoomCode(() => 0);
@@ -26,6 +26,18 @@ test("invite links carry the room code", () => {
   assert.equal(inviteLink("AB23CD", "https://localhost/"), "still://room?code=AB23CD");
   assert.equal(roomCodeFromUrl("https://example.com/app/?room=ab23cd"), "AB23CD");
   assert.equal(roomCodeFromUrl("still://room?code=ZZ99KK"), "ZZ99KK");
+});
+
+test("leaving a desk frees it so you can sit there again", () => {
+  const start = [{ id: "ana", displayName: "Ana", chibi: "pebbles", seat: 0, seen: 1 }];
+  const atB = assignSeat(start, "ana", 4);
+  assert.equal(atB.ok, true);
+  assert.equal(atB.members.length, 1);
+  assert.equal(atB.members[0].seat, 4);
+  const back = assignSeat(atB.members, "ana", 0);
+  assert.equal(back.ok, true);
+  assert.equal(back.members.length, 1);
+  assert.equal(back.members[0].seat, 0);
 });
 
 test("seats fill the first empty desk", () => {

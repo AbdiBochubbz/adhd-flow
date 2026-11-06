@@ -1589,6 +1589,14 @@ function ensurePresence() {
     onRoom(room, you) {
       const next = room ? JSON.stringify(room.members) : "";
       const seated = { ...state.room.seatedAt };
+      const youId = you?.id;
+      const previousSeat = state.room.current?.members?.find((member) => member.id === youId)?.seat;
+      const nextSeat = room?.members?.find((member) => member.id === youId)?.seat;
+      if (youId && previousSeat !== nextSeat) {
+        for (const key of Object.keys(state.room.walked)) {
+          if (key.startsWith(`${youId}:`)) delete state.room.walked[key];
+        }
+      }
       for (const member of room?.members || []) {
         if (!seated[member.id]) seated[member.id] = Date.now();
       }
