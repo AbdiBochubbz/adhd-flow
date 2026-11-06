@@ -110,6 +110,8 @@ Still on a laptop is the same app: PIN, encrypted tasks, the hallway and classro
 
 Reminders on the desktop fire while Still is open, including when the window is in the background. Closing the window quits the app, so a reminder cannot ring after you exit. Open Still when you want the morning list. The Android app is the one that can ring while it is fully closed.
 
+On the phone, Still asks for notification permission the first time you save a task. Android 12 and newer also need **Alarms & reminders** (Settings → Apps → Still). If a reminder still does not appear after you leave the app, set the battery use to **Unrestricted** and allow autostart. Xiaomi, Oppo, Vivo, Huawei, and some Samsung phones block alarms until those two switches are on. Inexact alarms can also arrive a few minutes late while the phone is sleeping.
+
 Build it yourself from PowerShell or WSL, after Node.js is installed:
 
 ```bash

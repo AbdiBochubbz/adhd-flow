@@ -9,6 +9,7 @@ const CHANNEL = "still-reminders";
 let nativePermission = "default";
 let channelReady = false;
 let listening = false;
+let promptedExact = false;
 
 export function isNative() {
   try {
@@ -30,7 +31,7 @@ export async function prepareNativeNotifications() {
         id: CHANNEL,
         name: "Reminders",
         description: "Due times and the morning list",
-        importance: 5,
+        importance: 4,
         visibility: 1,
       });
       channelReady = true;
@@ -56,27 +57,46 @@ export async function requestNativeNotifications() {
   }
 }
 
+async function exactAlarmsGranted() {
+  try {
+    const setting = await LocalNotifications.checkExactNotificationSetting();
+    return setting.exact_alarm === "granted";
+  } catch {
+    return false;
+  }
+}
+
 export async function scheduleNativeAlarms(slots) {
   if (!isNative()) return false;
-  const permission = await prepareNativeNotifications();
+  let permission = await prepareNativeNotifications();
+  if (permission !== "granted") permission = await requestNativeNotifications();
   if (permission !== "granted") return false;
   const alarms = nativeAlarms(slots);
+  const exact = await exactAlarmsGranted();
   try {
-    const pending = await LocalNotifications.getPending();
-    if (pending.notifications?.length) {
-      await LocalNotifications.cancel({ notifications: pending.notifications.map((item) => ({ id: item.id })) });
+    if (alarms.length) {
+      await LocalNotifications.schedule({
+        notifications: alarms.map((alarm) => ({
+          id: alarm.id,
+          title: alarm.title,
+          body: alarm.body,
+          channelId: CHANNEL,
+          isExactNotification: exact,
+          schedule: { at: new Date(alarm.at), allowWhileIdle: true },
+          extra: { taskId: alarm.taskId, kind: alarm.kind, slotId: alarm.slotId },
+        })),
+      });
     }
-    if (!alarms.length) return true;
-    await LocalNotifications.schedule({
-      notifications: alarms.map((alarm) => ({
-        id: alarm.id,
-        title: alarm.title,
-        body: alarm.body,
-        channelId: CHANNEL,
-        schedule: { at: new Date(alarm.at), allowWhileIdle: true },
-        extra: { taskId: alarm.taskId, kind: alarm.kind, slotId: alarm.slotId },
-      })),
-    });
+    const pending = await LocalNotifications.getPending();
+    const keep = new Set(alarms.map((alarm) => alarm.id));
+    const stale = (pending.notifications || []).filter((item) => !keep.has(item.id));
+    if (stale.length) {
+      await LocalNotifications.cancel({ notifications: stale.map((item) => ({ id: item.id })) });
+    }
+    if (!exact && !promptedExact) {
+      promptedExact = true;
+      LocalNotifications.changeExactNotificationSetting().catch(() => {});
+    }
     return true;
   } catch {
     return false;

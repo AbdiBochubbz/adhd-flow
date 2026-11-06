@@ -166,30 +166,38 @@ function render() {
 
 function startDeskWalk(node) {
   const floor = node.closest(".floor");
-  if (!floor) return;
-  const col = Number(node.style.getPropertyValue("--col")) || 0;
-  const row = Number(node.style.getPropertyValue("--row")) || 0;
-  const width = floor.clientWidth || 320;
-  const height = floor.clientHeight || 420;
-  const deskX = col * (width / 3);
-  const deskY = row * 104 + 18;
-  const doorX = width * 0.34;
-  const doorY = height - 28;
-  const shift = (x, y) => `translate(${Math.round(x - deskX)}px, ${Math.round(y - deskY)}px)`;
-  const anim = node.animate(
-    [
-      { transform: shift(doorX, doorY) },
-      { transform: shift(doorX, deskY + 10), offset: 0.46 },
-      { transform: shift(deskX, deskY + 10), offset: 0.74 },
-      { transform: "translate(0px, 8px)" },
-    ],
-    { duration: 1800, easing: "ease-in-out", fill: "forwards" },
-  );
-  anim.onfinish = () => {
-    anim.cancel();
+  if (!floor || node.dataset.walking === "1") return;
+  node.dataset.walking = "1";
+  const col = Number(node.dataset.col) || 0;
+  const row = Number(node.dataset.row) || 0;
+  const width = floor.clientWidth || 300;
+  const height = Math.max(floor.clientHeight || 0, 360);
+  const deskLeft = `${(col * 100) / 3}%`;
+  const deskTop = `${row * 104 + 26}px`;
+  const doorLeft = "34%";
+  const doorTop = `${height - 72}px`;
+  const aisleTop = `${row * 104 + 26}px`;
+  const sit = () => {
+    node.style.left = deskLeft;
+    node.style.top = deskTop;
     node.classList.remove("is-walking");
     node.classList.add("is-seated");
   };
+  try {
+    const anim = node.animate(
+      [
+        { left: doorLeft, top: doorTop },
+        { left: doorLeft, top: aisleTop, offset: 0.48 },
+        { left: deskLeft, top: aisleTop, offset: 0.76 },
+        { left: deskLeft, top: deskTop },
+      ],
+      { duration: 1800, easing: "ease-in-out", fill: "none" },
+    );
+    anim.onfinish = sit;
+  } catch {
+    sit();
+  }
+  setTimeout(sit, 2000);
 }
 
 function snapshot() {

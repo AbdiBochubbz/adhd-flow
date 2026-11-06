@@ -749,7 +749,7 @@ function settingsView(state) {
         h("span", { class: "switch", "aria-hidden": "true" }),
       ),
       state.native
-        ? h("p", {}, "This Android app puts reminders on the phone’s alarm clock. They can ring when Still is closed, including overnight, once notifications and Alarms & reminders are allowed.")
+        ? h("p", {}, "This Android app asks for notifications the first time you save a task, then sets an alarm. They can ring when Still is closed if notifications are allowed. On Android 12 and newer, also allow Alarms & reminders. Some phones (Xiaomi, Oppo, Vivo, Huawei, and sometimes Samsung) still delay alarms until Still is set to Unrestricted battery and allowed to autostart.")
         : h("p", {}, "While Still is open, it checks the list and can notify you. That part is reliable."),
       state.native
         ? null
@@ -1210,17 +1210,19 @@ function classroom(state) {
         const key = `${member.id}:${member.seat}`;
         const arriving = !room.walked[key];
         if (arriving) room.walked[key] = true;
+        const col = member.seat % 3;
+        const row = Math.floor(member.seat / 3);
         const activity = studyActivity(member.chibi);
         return h(
           "div",
           {
             class: arriving ? "walker is-walking" : "walker is-seated",
-            style: `--col:${member.seat % 3};--row:${Math.floor(member.seat / 3)}`,
-            dataset: { member: member.id, activity },
+            style: `left:${(col * 100) / 3}%;top:${row * 104 + 18}px`,
+            dataset: { member: member.id, activity, col: String(col), row: String(row) },
           },
           h("span", { class: "zzz", "aria-hidden": "true" }, "z"),
           chibiFigure(member.chibi),
-          arriving ? null : activityProp(activity),
+          activityProp(activity),
           h("span", { class: "desk-name" }, member.displayName),
         );
       }),
