@@ -1000,7 +1000,7 @@ function hallway(room) {
   const floor = room.floor === "3" ? "3" : "1";
   const doors = room.rooms.length
     ? room.rooms.map((item) => ({ code: item.code, label: item.name, count: item.count, join: true }))
-    : [{ code: "", label: "Empty classroom", count: 0, join: false }];
+    : [{ code: "", label: "New", count: 0, join: false }];
   return h(
     "div",
     { class: "hallway", "data-floor": floor },
@@ -1038,6 +1038,7 @@ function hallway(room) {
             "span",
             { class: "door-leaf" },
             h("span", { class: "door-pane", "aria-hidden": "true" }),
+            h("span", { class: "door-pane pane-right", "aria-hidden": "true" }),
             h("span", { class: "door-label" }, door.label),
             h("span", { class: "door-count" }, door.join ? `${door.count} inside` : "Open"),
           ),
