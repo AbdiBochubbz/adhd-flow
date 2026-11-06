@@ -988,6 +988,14 @@ function activityProp(kind) {
   );
 }
 
+function windowBank(curtain) {
+  return h(
+    "span",
+    { class: curtain ? "window has-curtain" : "window" },
+    h("span", { class: "panes" }, h("i"), h("i"), h("i"), h("i"), h("i"), h("i")),
+  );
+}
+
 function hallway(room) {
   const floor = room.floor === "3" ? "3" : "1";
   const doors = room.rooms.length
@@ -996,12 +1004,27 @@ function hallway(room) {
   return h(
     "div",
     { class: "hallway", "data-floor": floor },
+    h(
+      "div",
+      { class: "hall-ceiling", "aria-hidden": "true" },
+      h("span", { class: "tube" }),
+      h("span", { class: "tube" }),
+      h("span", { class: "tube" }),
+    ),
     h("p", { class: "hall-marker", "aria-hidden": "true" }, floor === "3" ? "3F" : "1F"),
-    h("div", { class: "hall-shine", "aria-hidden": "true" }),
+    h("div", { class: "hall-wainscot", "aria-hidden": "true" }),
+    h(
+      "div",
+      { class: "hall-windows", "aria-hidden": "true" },
+      h("span"),
+      h("span"),
+      h("span"),
+      h("span"),
+    ),
     h(
       "div",
       { class: "hall-doors" },
-      doors.map((door) =>
+      doors.map((door, index) =>
         h(
           "button",
           {
@@ -1009,13 +1032,37 @@ function hallway(room) {
             dataset: door.join ? { action: "room-join", code: door.code } : { action: "room-mode", value: "create" },
             "aria-label": door.join ? `Enter ${door.label}` : "Create a classroom",
           },
-          h("span", { class: "door-leaf" }),
-          h("span", { class: "door-label" }, door.label),
-          door.join ? h("span", { class: "door-count" }, `${door.count} inside`) : h("span", { class: "door-count" }, "Open"),
+          h("span", { class: "door-transom", "aria-hidden": "true" }),
+          h("span", { class: "door-plaque", "aria-hidden": "true" }, `${floor}-${index + 1}`),
+          h(
+            "span",
+            { class: "door-leaf" },
+            h("span", { class: "door-pane", "aria-hidden": "true" }),
+            h("span", { class: "door-label" }, door.label),
+            h("span", { class: "door-count" }, door.join ? `${door.count} inside` : "Open"),
+          ),
         ),
       ),
     ),
-    h("div", { class: "hall-lockers", "aria-hidden": "true" }, h("span"), h("span"), h("span"), h("span"), h("span"), h("span")),
+    h(
+      "div",
+      { class: "hall-lockers", "aria-hidden": "true" },
+      Array.from({ length: 16 }, () => h("span")),
+    ),
+    h(
+      "div",
+      { class: "hall-floor", "aria-hidden": "true" },
+      h("span", { class: "hall-line" }),
+      h("span", { class: "hall-gloss" }),
+    ),
+    h(
+      "div",
+      { class: "hall-rays", "aria-hidden": "true" },
+      h("span"),
+      h("span"),
+      h("span"),
+      h("span"),
+    ),
     h(
       "div",
       { class: "hall-floors", role: "group", "aria-label": "Floor" },
@@ -1176,20 +1223,46 @@ function classroom(state) {
     { class: "classroom" },
     h(
       "div",
-      { class: "class-windows", "aria-hidden": "true" },
-      h("span", { class: "window" }),
-      h("span", { class: "window" }),
-      h("span", { class: "window" }),
+      { class: "class-ceiling", "aria-hidden": "true" },
+      h("span", { class: "tube" }),
+      h("span", { class: "tube" }),
+      h("span", { class: "tube" }),
     ),
     h(
       "div",
-      { class: "class-board" },
-      h("p", {}, current.name),
-      h("p", { class: "board-note" }, "One thing, then the next."),
+      { class: "class-windows", "aria-hidden": "true" },
+      windowBank(true),
+      windowBank(false),
+      windowBank(false),
     ),
+    h(
+      "div",
+      { class: "class-front" },
+      h(
+        "div",
+        { class: "class-board" },
+        h("p", {}, current.name),
+        h("p", { class: "board-note" }, "One thing, then the next."),
+      ),
+      h(
+        "div",
+        { class: "class-side", "aria-hidden": "true" },
+        h("span", { class: "class-clock" }),
+        h("span", { class: "class-notices" }),
+      ),
+    ),
+    h("div", { class: "class-podium", "aria-hidden": "true" }),
     h(
       "div",
       { class: "floor" },
+      h(
+        "div",
+        { class: "sun-stripes", "aria-hidden": "true" },
+        h("span"),
+        h("span"),
+        h("span"),
+        h("span"),
+      ),
       h(
         "div",
         { class: "desk-grid" },
@@ -1202,9 +1275,15 @@ function classroom(state) {
               dataset: { action: "room-seat", seat: String(seat) },
               "aria-label": member ? `${member.displayName}, seat ${seat + 1}` : `Empty seat ${seat + 1}`,
             },
-            h("span", { class: "desk-empty" }, member ? "" : "Sit"),
+            h("span", { class: "desk-chair", "aria-hidden": "true" }),
+            member ? null : h("span", { class: "desk-empty" }, "Sit"),
           );
         }),
+      ),
+      h(
+        "div",
+        { class: "desk-tops", "aria-hidden": "true" },
+        Array.from({ length: SEAT_COUNT }, () => h("span", { class: "desk-top" })),
       ),
       members.map((member) => {
         const key = `${member.id}:${member.seat}`;

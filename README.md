@@ -65,7 +65,7 @@ Add task opens the composer. The rest of the widget opens Still.
 
 ### Study room
 
-The Room tab opens on a hallway. 1F is daylight and 3F is warmer evening light. Doors along the hall are classrooms. Pick one of six original looks. When you join, that chibi walks up the aisle and sits. At the desk they write, use a laptop, look at a phone, or read, depending on the look. After about a minute and a half with no taps they snooze, then wake and continue. A tap wakes them sooner. Your next private task sits under the desks. Tasks are not sent.
+The Room tab opens on a hallway drawn as original art: polished boards, teal classroom doors, shoe lockers, and a floor marker. 1F is daylight. 3F is warm evening. The classroom is golden hour, with wood desks on teal frames and sunlight across the floor. Doors along the hall are classrooms. Pick one of six original looks. When you join, that chibi walks up the aisle and sits. At the desk they write, use a laptop, look at a phone, or read, depending on the look. After about a minute and a half with no taps they snooze, then wake and continue. A tap wakes them sooner. Your next private task sits under the desks. Tasks are not sent.
 
 The task list and the add screen shift with the clock: morning, midday, evening, and night.
 
