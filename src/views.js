@@ -675,31 +675,13 @@ function segment(label, action, current, options) {
 
 function accountBlock(state) {
   const account = state.account || {};
-  const configured = Boolean(String(account.url || "").trim());
   const signedIn = account.status === "signed-in";
   return h(
     "div",
     { class: "settings-block" },
     h("h2", {}, "Account"),
-    h("p", { class: "help" }, account.detail || "Sync is not connected. Tasks stay on this device."),
-    h("label", { class: "field-label", for: "account-url" }, "Account server"),
-    h("input", {
-      id: "account-url",
-      class: "field",
-      value: account.url || "",
-      placeholder: "https://your-server",
-      spellcheck: "false",
-      autocapitalize: "off",
-    }),
-    h("button", { class: "btn-ghost", dataset: { action: "account-save-url" } }, configured ? "Save server address" : "Keep sync off"),
-    configured
-      ? null
-      : h(
-          "p",
-          { class: "fine" },
-          "This install has no account server. Nothing is uploaded. When you run one, paste its address here. An email address alone cannot open a list.",
-        ),
-    configured && !signedIn && !account.hold
+    h("p", { class: "help" }, account.detail || "Sign in with a confirmed email to sync. Nothing is uploaded before that."),
+    !signedIn && !account.hold
       ? h(
           "div",
           { class: "stack" },
@@ -730,7 +712,7 @@ function accountBlock(state) {
             { class: "btn-ghost", dataset: { action: "account-register" }, disabled: account.busy },
             "Create account",
           ),
-          h("p", { class: "fine" }, "This password is only for a server you configure. It does not prove you own the email, and no hosted account is connected in this install."),
+          h("p", { class: "fine" }, "Creating an account sends a confirmation email. The list is not uploaded until that email is confirmed. The password is for the account, not a device PIN."),
         )
       : null,
     signedIn

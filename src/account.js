@@ -10,15 +10,8 @@ export function normalizeEmail(value) {
   return email;
 }
 
-export async function makeLoginProof(password, email, iterations = SYNC_ITERATIONS) {
-  const bits = await deriveBits(password, new TextEncoder().encode(`still-login-v1:${email}`), iterations);
-  return bytesToB64(bits);
-}
-
-export async function makeWrapKey(password, email, wrapSalt, iterations = SYNC_ITERATIONS) {
-  const salt = wrapSalt instanceof Uint8Array ? wrapSalt : b64ToBytes(wrapSalt);
-  const material = new TextEncoder().encode(`still-wrap-v1:${email}:${bytesToB64(salt)}`);
-  const bits = await deriveBits(password, material, iterations);
+export async function makeWrapKey(password, userId, iterations = SYNC_ITERATIONS) {
+  const bits = await deriveBits(password, new TextEncoder().encode(`still-wrap-v1:${userId}`), iterations);
   return importAesKey(bits);
 }
 
@@ -52,138 +45,167 @@ export async function openFromAccount(syncKey, blob) {
   return sanitizePayload(await decryptJson(syncKey, packed));
 }
 
-export function createSyncClient(baseUrl, fetchImpl = globalThis.fetch) {
-  const root = String(baseUrl || "").replace(/\/$/, "");
-  async function send(path, { method = "GET", token, body } = {}) {
-    let response;
-    try {
-      response = await fetchImpl(`${root}${path}`, {
-        method,
-        headers: {
-          accept: "application/json",
-          ...(body ? { "content-type": "application/json" } : {}),
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
-        },
-        body: body ? JSON.stringify(body) : undefined,
-      });
-    } catch (error) {
-      const wrapped = new Error("The account server could not be reached.");
-      wrapped.cause = error;
-      wrapped.status = 0;
-      throw wrapped;
-    }
-    const text = await response.text();
-    let json = null;
-    if (text) {
-      try {
-        json = JSON.parse(text);
-      } catch {
-        json = null;
-      }
-    }
-    if (!response.ok) {
-      const error = new Error(json?.error || "The account server refused that request.");
-      error.status = response.status;
-      error.body = json;
-      throw error;
-    }
-    return json;
-  }
+function httpError(status, message, body) {
+  const error = new Error(message);
+  error.status = status;
+  error.body = body;
+  return error;
+}
+
+/** In-memory stand-in for the Supabase table rules: one row per user, no empty ciphertext, no cross-user reads. */
+export function createMemoryVaults() {
+  const rows = new Map();
   return {
-    register: (email, loginProof) => send("/v1/register", { method: "POST", body: { email, loginProof } }),
-    login: (email, loginProof) => send("/v1/login", { method: "POST", body: { email, loginProof } }),
-    logout: (token) => send("/v1/logout", { method: "POST", token }),
-    pull: (token) => send("/v1/vault", { token }),
-    push: (token, body) => send("/v1/vault", { method: "PUT", token, body }),
+    rows,
+    forUser(userId) {
+      return {
+        async pull() {
+          const row = rows.get(userId) || null;
+          if (!row) return { revision: 0, blob: null, wrappedSyncKey: null };
+          return { revision: row.revision, blob: row.blob, wrappedSyncKey: row.wrappedSyncKey };
+        },
+        async push({ baseRevision, blob, wrappedSyncKey }) {
+          if (!blob?.iv || !blob?.ct || blob.ct.length < 17) throw httpError(400, "empty ciphertext");
+          const current = rows.get(userId) || null;
+          if (!current) {
+            if (baseRevision !== 0) throw httpError(409, "revision conflict", { revision: 0, blob: null, wrappedSyncKey: null });
+            if (!wrappedSyncKey?.iv || !wrappedSyncKey?.ct) throw httpError(400, "wrapped key required");
+            rows.set(userId, { revision: 0, blob, wrappedSyncKey });
+            return { revision: 0 };
+          }
+          if (current.revision !== baseRevision) {
+            throw httpError(409, "revision conflict", { revision: current.revision, blob: current.blob, wrappedSyncKey: current.wrappedSyncKey });
+          }
+          current.revision += 1;
+          current.blob = blob;
+          return { revision: current.revision };
+        },
+      };
+    },
   };
 }
 
-/**
- * Link this device to an account. The password is used to build a login proof and to unwrap
- * the sync key. It is not returned and is not written into the vault.
- * Local tasks are left untouched when the server cannot be read or the password cannot unwrap.
- */
-export async function connectAccount({ url, email, password, mode, local, iterations = SYNC_ITERATIONS, fetchImpl }) {
+export function createFakeAuth(vaults, users = new Map()) {
+  let current = null;
+  return {
+    async signUp({ email }) {
+      const normalized = normalizeEmail(email);
+      if (users.has(normalized)) return { data: { session: null, user: null }, error: { message: "already registered", status: 409 } };
+      const user = { id: `user-${users.size + 1}`, email: normalized, email_confirmed_at: null };
+      users.set(normalized, user);
+      return { data: { session: null, user }, error: null };
+    },
+    async confirm(email) {
+      const user = users.get(normalizeEmail(email));
+      if (user) user.email_confirmed_at = new Date().toISOString();
+    },
+    async signInWithPassword({ email }) {
+      const user = users.get(normalizeEmail(email));
+      if (!user) return { data: { session: null, user: null }, error: { message: "Invalid login credentials", status: 401 } };
+      if (!user.email_confirmed_at) return { data: { session: null, user }, error: { message: "Email not confirmed", status: 401 } };
+      current = user;
+      return { data: { session: { user }, user }, error: null };
+    },
+    async getUser() {
+      return { data: { user: current }, error: current ? null : { message: "signed out" } };
+    },
+    async signOut() {
+      current = null;
+    },
+    storeForCurrent() {
+      if (!current) throw httpError(401, "signed out");
+      return vaults.forUser(current.id);
+    },
+  };
+}
+
+export async function connectAccount({ email, password, mode, local, iterations = SYNC_ITERATIONS, auth, store, redirectTo }) {
   const normalized = normalizeEmail(email);
   if (!normalized) return { ok: false, message: "Enter the email address for the account." };
   if (!password || String(password).length < 8) {
-    return { ok: false, message: "Use a password of at least 8 characters. The PIN stays separate." };
+    return { ok: false, message: "Use a password of at least 8 characters." };
   }
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return { ok: false, message: "Enter the server address, starting with https://." };
+  if (mode === "register") {
+    const { data, error } = await auth.signUp({
+      email: normalized,
+      password,
+      options: { emailRedirectTo: redirectTo },
+    });
+    if (error) {
+      const taken = error.status === 409 || /already/i.test(error.message || "");
+      return {
+        ok: false,
+        message: taken
+          ? "That email already has an account. Sign in instead. Nothing on this device was changed."
+          : "The account could not be created. Nothing on this device was changed.",
+      };
+    }
+    if (!data?.session) {
+      return {
+        ok: true,
+        needsConfirmation: true,
+        message: "Check that email and confirm it before the list can sync. Nothing was uploaded.",
+      };
+    }
+  } else {
+    const { data, error } = await auth.signInWithPassword({ email: normalized, password });
+    if (error || !data?.session) {
+      const unconfirmed = /confirm/i.test(error?.message || "");
+      return {
+        ok: false,
+        needsConfirmation: unconfirmed,
+        message: unconfirmed
+          ? "That email is not confirmed yet. Nothing was uploaded."
+          : "That email or password did not match. Nothing on this device was changed.",
+      };
+    }
   }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    return { ok: false, message: "Enter the server address, starting with https://." };
+  const { data: userData } = await auth.getUser();
+  const user = userData?.user;
+  if (!user?.id || !user.email_confirmed_at) {
+    return { ok: true, needsConfirmation: true, message: "Confirm that email before the list can sync. Nothing was uploaded." };
   }
-  const client = createSyncClient(parsed.origin + parsed.pathname.replace(/\/$/, ""), fetchImpl);
-  const proof = await makeLoginProof(password, normalized, iterations);
-  let auth;
-  try {
-    auth = mode === "register" ? await client.register(normalized, proof) : await client.login(normalized, proof);
-  } catch (error) {
-    if (error.status === 401) return { ok: false, message: "That email or password didn’t match. Nothing on this device was changed." };
-    if (error.status === 409) return { ok: false, message: "That email already has an account. Sign in instead. Nothing on this device was changed." };
-    return { ok: false, message: "The account server could not be reached. Nothing on this device was changed." };
-  }
+  const vaultStore = store || auth.storeForCurrent();
   const mismatched = Boolean(local?.accountEmail) && local.accountEmail !== normalized;
   try {
-    return await finishLink({
-      client,
-      token: auth.token,
-      password,
-      email: normalized,
-      wrapSalt: auth.wrapSalt,
-      local,
-      iterations,
-      mismatched,
-      url: parsed.origin + parsed.pathname.replace(/\/$/, ""),
-    });
+    return await finishLink({ store: vaultStore, password, email: normalized, userId: user.id, local, iterations, mismatched });
   } catch {
-    try {
-      await client.logout(auth.token);
-    } catch {
-      /* the session can expire on its own */
-    }
     return { ok: false, message: "The account list could not be opened. Nothing on this device was changed." };
   }
 }
 
-async function finishLink({ client, token, password, email, wrapSalt, local, iterations, mismatched, url }) {
-  const remoteRecord = await client.pull(token);
+async function finishLink({ store, password, email, userId, local, iterations, mismatched }) {
+  const remoteRecord = await store.pull();
   let syncKeyB64 = "";
   let syncKey = null;
   let wrapped = null;
+  const wrapKey = await makeWrapKey(password, userId, iterations);
   if (remoteRecord.wrappedSyncKey) {
-    const wrapKey = await makeWrapKey(password, email, remoteRecord.wrapSalt || wrapSalt, iterations);
     syncKeyB64 = await unwrapSyncKey(wrapKey, remoteRecord.wrappedSyncKey);
     syncKey = await openSyncKey(syncKeyB64);
   } else {
     const created = await createSyncKey();
     syncKeyB64 = created.syncKeyB64;
     syncKey = created.key;
-    wrapped = await wrapSyncKey(await makeWrapKey(password, email, remoteRecord.wrapSalt || wrapSalt, iterations), syncKeyB64);
+    wrapped = await wrapSyncKey(wrapKey, syncKeyB64);
   }
   let remote = null;
-  if (remoteRecord.blob) {
-    remote = await openFromAccount(syncKey, remoteRecord.blob);
-  }
-  if (mismatched && (remote?.tasks?.length || local?.tasks?.length)) {
+  if (remoteRecord.blob) remote = await openFromAccount(syncKey, remoteRecord.blob);
+  const session = { email, userId, revision: remoteRecord.revision || 0 };
+  if (mismatched && ((remote?.tasks?.length || 0) > 0 || (local?.tasks?.length || 0) > 0)) {
     return {
       ok: true,
       held: true,
-      session: { url, email, token, wrapSalt: remoteRecord.wrapSalt || wrapSalt },
+      session,
+      store,
       syncKeyB64,
       remote,
       remoteRevision: remoteRecord.revision || 0,
-      message: "This phone’s list belongs to a different account. Nothing was copied either way.",
+      message: "This device’s list belongs to a different account. Nothing was copied either way.",
     };
   }
   const outcome = await pushPlan({
-    client,
-    token,
+    store,
     syncKey,
     syncKeyB64,
     local: { ...local, accountEmail: email, syncKeyB64 },
@@ -196,14 +218,14 @@ async function finishLink({ client, token, password, email, wrapSalt, local, ite
   return {
     ok: true,
     held: false,
-    session: { url, email, token, wrapSalt: remoteRecord.wrapSalt || wrapSalt, revision: outcome.revision },
+    session: { ...session, revision: outcome.revision },
     syncKeyB64,
     payload: outcome.payload,
     message: outcome.message,
   };
 }
 
-export async function pushPlan({ client, token, syncKey, syncKeyB64, local, remote, baseRevision, remoteRevision, dirty, wrapped }) {
+export async function pushPlan({ store, syncKey, syncKeyB64, local, remote, baseRevision, remoteRevision, dirty, wrapped }) {
   const plan = planSync({ local, remote, baseRevision, remoteRevision, dirty });
   if (plan.action === "none") {
     return { payload: { ...local, syncKeyB64 }, revision: remoteRevision, message: "Already up to date.", changed: false };
@@ -216,10 +238,11 @@ export async function pushPlan({ client, token, syncKey, syncKeyB64, local, remo
       changed: true,
     };
   }
-  const payload = { ...plan.payload, accountEmail: local.accountEmail || payloadAccount(local), syncKeyB64 };
+  const payload = { ...plan.payload, accountEmail: local.accountEmail || "", syncKeyB64 };
   const blob = await sealForAccount(syncKey, payload);
+  if (!blob.ct || blob.ct.length < 17) throw httpError(400, "empty ciphertext");
   try {
-    const saved = await client.push(token, { baseRevision: plan.baseRevision, blob, wrappedSyncKey: wrapped || undefined });
+    const saved = await store.push({ baseRevision: plan.baseRevision, blob, wrappedSyncKey: wrapped || null });
     return {
       payload,
       revision: saved.revision,
@@ -240,22 +263,17 @@ export async function pushPlan({ client, token, syncKey, syncKeyB64, local, remo
     if (merged.action === "adopt") {
       return { payload: next, revision: error.body.revision, changed: true, message: "Used the account list. This device had nothing newer." };
     }
-    const saved = await client.push(token, { baseRevision: error.body.revision, blob: await sealForAccount(syncKey, next) });
+    const saved = await store.push({ baseRevision: error.body.revision, blob: await sealForAccount(syncKey, next) });
     return { payload: next, revision: saved.revision, changed: true, message: "Merged both lists and saved the result." };
   }
 }
 
-function payloadAccount(local) {
-  return local?.accountEmail || "";
-}
-
-export async function syncExisting({ client, token, syncKey, local, baseRevision, dirty = false }) {
-  const remoteRecord = await client.pull(token);
+export async function syncExisting({ store, syncKey, local, baseRevision, dirty = false }) {
+  const remoteRecord = await store.pull();
   let remote = null;
   if (remoteRecord.blob) remote = await openFromAccount(syncKey, remoteRecord.blob);
   return pushPlan({
-    client,
-    token,
+    store,
     syncKey,
     syncKeyB64: local.syncKeyB64,
     local,

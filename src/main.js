@@ -1,4 +1,5 @@
-import { connectAccount, createSyncClient, openSyncKey, pushPlan, syncExisting } from "./account.js";
+import { connectAccount, openSyncKey, pushPlan, syncExisting } from "./account.js";
+import { authRedirectUrl, supabase, supabaseVaultStore } from "./supabase.js";
 import { mergePayloads } from "./merge.js";
 import { decideBoot, mergeKeptLists, unlockLegacy } from "./migrate.js";
 import { checkVerifier, decryptJson, deriveKey } from "./crypto.js";
@@ -1748,15 +1749,15 @@ function scheduleSync() {
 }
 
 async function runSync({ force = false } = {}) {
-  if (sealing || !state.key || !state.syncKey || state.account.hold) return;
+  if (sealing || state.screen !== "app" || !state.syncKey || state.account.hold) return;
   if (!force && !state.account.dirty) return;
   const session = await kvGet("sync-session");
-  if (!session?.token || !session.url) return;
+  const { data: authData } = await supabase.auth.getSession();
+  if (!session?.userId || !authData.session?.user?.email_confirmed_at) return;
   state.account.busy = true;
   try {
     const outcome = await syncExisting({
-      client: createSyncClient(session.url),
-      token: session.token,
+      store: supabaseVaultStore(supabase),
       syncKey: state.syncKey,
       local: snapshot(),
       baseRevision: session.revision || 0,
@@ -1802,32 +1803,33 @@ async function applySynced(outcome, session) {
 
 async function submitAccount(mode) {
   if (state.account.busy) return;
-  const url = state.account.url.trim();
-  if (!url) {
-    state.account.detail = "Sync is not connected. Add the account server address first. Nothing was sent.";
-    render();
-    return;
-  }
   state.account.busy = true;
-  state.account.detail = "Checking the account…";
+  state.account.detail = mode === "register" ? "Creating the account…" : "Checking the account…";
   render();
   const password = state.account.passwordDraft;
   state.account.passwordDraft = "";
   const local = snapshot();
   const result = await connectAccount({
-    url,
     email: state.account.emailDraft,
     password,
     mode,
     local,
+    auth: supabase.auth,
+    store: supabaseVaultStore(supabase),
+    redirectTo: authRedirectUrl(),
   });
+  if (result.ok && !result.needsConfirmation && !result.held) {
+    result.store = supabaseVaultStore(supabase);
+  }
   state.account.busy = false;
-  if (!result.ok) {
+  if (!result.ok || result.needsConfirmation) {
+    state.account.status = result.needsConfirmation ? "confirm" : state.account.status;
     state.account.detail = result.message;
     render();
     return;
   }
   if (result.held) {
+    result.store = supabaseVaultStore(supabase);
     state.account.hold = result;
     state.account.status = "held";
     state.account.detail = result.message;
@@ -1860,15 +1862,10 @@ async function saveAccountUrl() {
 }
 
 async function signOutAccount({ keepDetail = false } = {}) {
-  const session = await kvGet("sync-session").catch(() => null);
-  const held = state.account.hold?.session;
-  for (const item of [session, held]) {
-    if (!item?.token || !item.url) continue;
-    try {
-      await createSyncClient(item.url).logout(item.token);
-    } catch {
-      /* signing out locally still drops the token */
-    }
+  try {
+    await supabase.auth.signOut();
+  } catch {
+    /* the on-device list stays either way */
   }
   await clearSyncSession().catch(() => {});
   state.syncKey = null;
@@ -1921,8 +1918,7 @@ async function mergeAccountList() {
   const merged = mergePayloads(local, held.remote || { tasks: [], tombstones: [], settings: local.settings });
   try {
     const outcome = await pushPlan({
-      client: createSyncClient(held.session.url),
-      token: held.session.token,
+      store: held.store || supabaseVaultStore(supabase),
       syncKey: state.syncKey,
       syncKeyB64: held.syncKeyB64,
       local: { ...merged, accountEmail: held.session.email, syncKeyB64: held.syncKeyB64 },
@@ -1977,31 +1973,27 @@ async function exportPartial() {
 }
 
 async function loadAccountSession() {
+  state.account.url = "https://irooqmewtvsfoqscwncs.supabase.co";
+  let saved = null;
   try {
-    state.account.url = localStorage.getItem("still-sync-url") || "";
+    saved = await kvGet("sync-session");
   } catch {
-    state.account.url = "";
+    saved = null;
   }
-  let session = null;
-  try {
-    session = await kvGet("sync-session");
-  } catch {
-    session = null;
-  }
-  if (!state.account.url) {
-    state.account.status = "unconfigured";
-    state.account.detail = "Sync is not connected. No account server is set, so tasks stay on this device.";
-    return;
-  }
-  if (session?.token && session.url === state.account.url) {
+  const { data } = await supabase.auth.getSession();
+  const user = data.session?.user;
+  if (user?.email_confirmed_at) {
     state.account.status = "signed-in";
-    state.account.email = session.email || "";
-    state.account.revision = session.revision || 0;
-    state.account.detail = "Signed in. The list syncs after you unlock.";
+    state.account.email = user.email || "";
+    state.account.revision = saved?.userId === user.id ? saved.revision || 0 : 0;
+    state.account.detail = "Signed in. This device has not confirmed a sync yet.";
+    if (saved?.userId !== user.id) {
+      await kvSet("sync-session", { email: user.email, userId: user.id, revision: 0 });
+    }
     return;
   }
   state.account.status = "signed-out";
-  state.account.detail = "A server address is saved. You are signed out, so tasks stay on this device.";
+  state.account.detail = "Sign in with a confirmed email to sync. Nothing is uploaded before that.";
 }
 
 async function boot() {

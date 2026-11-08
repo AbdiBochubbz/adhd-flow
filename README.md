@@ -33,9 +33,11 @@ If an older installed copy still opens, its PIN can export an encrypted backup. 
 
 ## Account sync
 
-There is no hosted account in this install. Settings stays disconnected until a real server address is saved. A password on a self-run process does not prove mailbox ownership, so it is not email-linked sync.
+The account is the Still Supabase project at `https://irooqmewtvsfoqscwncs.supabase.co`. Sign-up asks Supabase to email a confirmation link. The list is not uploaded until that address is confirmed. Email confirmation was left on.
 
-The managed route that does verify email is [Supabase Auth](https://supabase.com/docs/guides/auth/passwords). On a hosted project, email confirmation is on by default. The built-in mailer only sends to members of that Supabase organization and is limited to about 2 messages an hour, so it cannot verify an arbitrary school email. Real recipients need a custom SMTP provider, configured in the project’s Authentication email settings ([SMTP guide](https://supabase.com/docs/guides/auth/auth-smtp)). Creating that project and SMTP account has not been done here. The app does not include Supabase keys.
+The built-in Supabase mailer only delivers to members of the Supabase organization, about 2 messages an hour ([SMTP guide](https://supabase.com/docs/guides/auth/auth-smtp)). Other addresses need custom SMTP in Authentication → Emails. Redirect URLs must include every place the app runs: `http://127.0.0.1:47321/**`, `https://localhost/**`, and the GitHub Pages origin if that site is used. Add them under Authentication → URL Configuration. Do not turn off email confirmation.
+
+The database table `still_vaults` stores ciphertext only. Row level security allows each confirmed user to read and write their own row. Anonymous clients have no access, and there is no delete privilege. This has been checked with synthetic users that were rolled back. A full sign-up through a real inbox has not been run, so this is not yet a verified end-to-end sync.
 
 Sign-out leaves the on-device list in place. A failed sign-in does not replace it. An empty account list does not wipe a device that already has tasks, and an empty device does not wipe an account that has tasks. Two devices on the same account merge by task. A different account is not given this device’s tasks unless you explicitly choose Merge or Use the account list.
 

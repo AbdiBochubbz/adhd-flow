@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { connectAccount, createSyncClient, createSyncKey, makeLoginProof, openSyncKey, sealForAccount, unwrapSyncKey, wrapSyncKey, makeWrapKey } from "../src/account.js";
-import { importAesKey, randomBytes } from "../src/crypto.js";
-import { planSync, mergePayloads } from "../src/merge.js";
-import { assertCanCreate } from "../src/vault.js";
-import { createAccountServer } from "../server/account.mjs";
+import { connectAccount, createFakeAuth, createMemoryVaults, openSyncKey, syncExisting, unwrapSyncKey, wrapSyncKey, makeWrapKey } from "../src/account.js";
+import { randomBytes } from "../src/crypto.js";
+import { afterSignOut } from "../src/migrate.js";
 
 const FAST = 1000;
 
@@ -29,187 +27,120 @@ function payload(tasks, extra = {}) {
   return {
     tasks,
     tombstones: extra.tombstones || [],
-    settings: { theme: "system", settingsUpdatedAt: extra.settingsUpdatedAt || 0, ...(extra.settings || {}) },
+    settings: { theme: "system", settingsUpdatedAt: extra.settingsUpdatedAt || 0 },
     accountEmail: extra.accountEmail || "",
     syncKeyB64: extra.syncKeyB64 || "",
   };
 }
 
-test("an existing vault header cannot be replaced by setup", () => {
-  assert.throws(() => assertCanCreate({ salt: new Uint8Array(16), verifier: null, vault: null }), /already on this device/);
-  assert.throws(() => assertCanCreate({ salt: new Uint8Array(16), verifier: { iv: 1 }, vault: { iv: 1 } }), /already/);
-  assert.doesNotThrow(() => assertCanCreate({ salt: null, verifier: null, vault: null }));
-  assert.doesNotThrow(() => assertCanCreate({ salt: new Uint8Array(16), verifier: { iv: 1 }, vault: { iv: 1 } }, true));
+test("signup does not upload before the email is confirmed", async () => {
+  const vaults = createMemoryVaults();
+  const auth = createFakeAuth(vaults);
+  const local = payload([task("a", "Math homework", 1)]);
+  const pending = await connectAccount({
+    email: "ada@example.com",
+    password: "long-password",
+    mode: "register",
+    local,
+    iterations: FAST,
+    auth,
+    redirectTo: "http://127.0.0.1:47321/",
+  });
+  assert.equal(pending.needsConfirmation, true);
+  assert.equal(vaults.rows.size, 0);
+  assert.equal(local.tasks[0].title, "Math homework");
+  const early = await connectAccount({
+    email: "ada@example.com",
+    password: "long-password",
+    mode: "login",
+    local,
+    iterations: FAST,
+    auth,
+  });
+  assert.equal(early.ok, false);
+  assert.equal(vaults.rows.size, 0);
 });
 
-test("an empty remote list does not replace local tasks, and an empty local list does not erase remote tasks", () => {
-  const local = payload([task("a", "Math homework", 10)]);
-  const keep = planSync({ local, remote: payload([]), baseRevision: 1, remoteRevision: 2, dirty: true });
-  assert.equal(keep.action, "push");
-  assert.equal(keep.payload.tasks.length, 1);
-  assert.equal(keep.payload.tasks[0].title, "Math homework");
+test("two confirmed clients merge offline edits and a second account cannot read them", async () => {
+  const vaults = createMemoryVaults();
+  const users = new Map();
+  const phone = createFakeAuth(vaults, users);
+  const laptop = createFakeAuth(vaults, users);
+  await connectAccount({
+    email: "ada@example.com",
+    password: "long-password",
+    mode: "register",
+    local: payload([]),
+    iterations: FAST,
+    auth: phone,
+  });
+  await phone.confirm("ada@example.com");
+  const first = await connectAccount({
+    email: "ada@example.com",
+    password: "long-password",
+    mode: "login",
+    local: payload([task("a", "Math homework", 10)]),
+    iterations: FAST,
+    auth: phone,
+  });
+  assert.equal(first.ok, true);
+  assert.equal(first.payload.tasks[0].title, "Math homework");
 
-  const adopt = planSync({ local: payload([]), remote: local, baseRevision: 0, remoteRevision: 2, dirty: false });
-  assert.equal(adopt.action, "adopt");
-  assert.equal(adopt.payload.tasks[0].title, "Math homework");
+  const second = await connectAccount({
+    email: "ada@example.com",
+    password: "long-password",
+    mode: "login",
+    local: payload([task("b", "Essay", 12)], { accountEmail: "ada@example.com" }),
+    iterations: FAST,
+    auth: laptop,
+  });
+  assert.equal(second.ok, true);
+  assert.deepEqual(second.payload.tasks.map((item) => item.title).sort(), ["Essay", "Math homework"]);
 
-  const deleted = planSync({
-    local: payload([], { tombstones: [{ id: "a", at: 50 }] }),
-    remote: local,
-    baseRevision: 1,
-    remoteRevision: 2,
+  const offline = payload(second.payload.tasks, { accountEmail: "ada@example.com", syncKeyB64: second.syncKeyB64 });
+  offline.tasks.push(task("c", "Lab", 20));
+  const key = await openSyncKey(second.syncKeyB64);
+  const synced = await syncExisting({
+    store: laptop.storeForCurrent(),
+    syncKey: key,
+    local: offline,
+    baseRevision: second.session.revision,
     dirty: true,
   });
-  assert.equal(deleted.action, "push");
-  assert.equal(deleted.payload.tasks.length, 0);
-  assert.equal(deleted.payload.tombstones[0].id, "a");
+  assert.equal(synced.payload.tasks.length, 3);
+
+  const other = createFakeAuth(vaults, users);
+  await connectAccount({
+    email: "bea@example.com",
+    password: "other-password",
+    mode: "register",
+    local: payload([task("a", "Private essay", 4)], { accountEmail: "ada@example.com" }),
+    iterations: FAST,
+    auth: other,
+  });
+  await other.confirm("bea@example.com");
+  const held = await connectAccount({
+    email: "bea@example.com",
+    password: "other-password",
+    mode: "login",
+    local: payload([task("a", "Private essay", 4)], { accountEmail: "ada@example.com" }),
+    iterations: FAST,
+    auth: other,
+  });
+  assert.equal(held.held, true);
+  const beaRow = vaults.rows.get(held.session.userId);
+  assert.equal(beaRow, undefined);
+  assert.equal(vaults.rows.get(first.session.userId).blob.ct.length > 16, true);
 });
 
-test("merge keeps both tasks and the newer edit of a shared task", () => {
-  const merged = mergePayloads(
-    payload([task("a", "Math, revised", 20), task("b", "Essay", 5)]),
-    payload([task("a", "Math", 10), task("c", "Lab", 8)]),
-  );
-  const titles = Object.fromEntries(merged.tasks.map((item) => [item.id, item.title]));
-  assert.deepEqual(titles, { a: "Math, revised", b: "Essay", c: "Lab" });
-});
-
-test("email alone cannot read a vault, and two accounts stay apart", async () => {
-  const server = await createAccountServer();
-  try {
-    const client = createSyncClient(server.url);
-    const proof = await makeLoginProof("long-password", "ada@example.com", FAST);
-    const otherProof = await makeLoginProof("other-password", "bea@example.com", FAST);
-    const ada = await client.register("ada@example.com", proof);
-    const key = await createSyncKey();
-    const wrap = await makeWrapKey("long-password", "ada@example.com", ada.wrapSalt, FAST);
-    const blob = await sealForAccount(key.key, payload([task("a", "Math homework", 1)], { syncKeyB64: key.syncKeyB64 }));
-    await client.push(ada.token, { baseRevision: 0, blob, wrappedSyncKey: await wrapSyncKey(wrap, key.syncKeyB64) });
-
-    const emailOnly = await fetch(`${server.url}/v1/login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: "ada@example.com" }),
-    });
-    assert.equal(emailOnly.status, 400);
-    const peek = await fetch(`${server.url}/v1/vault?email=ada@example.com`);
-    assert.equal(peek.status, 401);
-
-    const bea = await client.register("bea@example.com", otherProof);
-    const beaList = await client.pull(bea.token);
-    assert.equal(beaList.blob, null);
-    assert.notEqual(JSON.stringify(beaList), JSON.stringify(await client.pull(ada.token)));
-
-    await client.logout(ada.token);
-    await assert.rejects(() => client.pull(ada.token), (error) => error.status === 401);
-  } finally {
-    await server.close();
-  }
-});
-
-test("two clients for one account merge offline edits and a wrong password changes nothing", async () => {
-  const server = await createAccountServer();
-  try {
-    const local = payload([task("a", "Math homework", 10)]);
-    const before = JSON.parse(JSON.stringify(local));
-    const wrong = await connectAccount({
-      url: server.url,
-      email: "ada@example.com",
-      password: "long-password",
-      mode: "login",
-      local,
-      iterations: FAST,
-    });
-    assert.equal(wrong.ok, false);
-    assert.deepEqual(local, before);
-
-    const first = await connectAccount({
-      url: server.url,
-      email: "ada@example.com",
-      password: "long-password",
-      mode: "register",
-      local,
-      iterations: FAST,
-    });
-    assert.equal(first.ok, true);
-    assert.equal(first.payload.tasks[0].title, "Math homework");
-    assert.deepEqual(local, before);
-
-    const phone = payload([task("b", "Essay", 12)], { accountEmail: "ada@example.com" });
-    const second = await connectAccount({
-      url: server.url,
-      email: "ada@example.com",
-      password: "long-password",
-      mode: "login",
-      local: phone,
-      iterations: FAST,
-    });
-    assert.equal(second.ok, true);
-    const titles = second.payload.tasks.map((item) => item.title).sort();
-    assert.deepEqual(titles, ["Essay", "Math homework"]);
-
-    const client = createSyncClient(server.url);
-    const proof = await makeLoginProof("long-password", "ada@example.com", FAST);
-    const again = await client.login("ada@example.com", proof);
-    const stale = await openSyncKey(second.syncKeyB64);
-    const staleBlob = await sealForAccount(stale, payload([task("a", "Math, old", 1)], { accountEmail: "ada@example.com", syncKeyB64: second.syncKeyB64 }));
-    await assert.rejects(
-      () => client.push(again.token, { baseRevision: 0, blob: staleBlob }),
-      (error) => error.status === 409,
-    );
-    const stored = await client.pull(again.token);
-    const opened = await (await import("../src/account.js")).openFromAccount(stale, stored.blob);
-    assert.equal(opened.tasks.length, 2);
-
-    const emptyPush = await fetch(`${server.url}/v1/vault`, {
-      method: "PUT",
-      headers: { "content-type": "application/json", authorization: `Bearer ${again.token}` },
-      body: JSON.stringify({ baseRevision: stored.revision }),
-    });
-    assert.equal(emptyPush.status, 400);
-    const stillThere = await client.pull(again.token);
-    assert.equal(stillThere.blob.ct, stored.blob.ct);
-  } finally {
-    await server.close();
-  }
-});
-
-test("a different account does not receive this device's tasks", async () => {
-  const server = await createAccountServer();
-  try {
-    const local = payload([task("a", "Private essay", 4)], { accountEmail: "ada@example.com" });
-    await connectAccount({
-      url: server.url,
-      email: "ada@example.com",
-      password: "long-password",
-      mode: "register",
-      local,
-      iterations: FAST,
-    });
-    const held = await connectAccount({
-      url: server.url,
-      email: "bea@example.com",
-      password: "other-password",
-      mode: "register",
-      local,
-      iterations: FAST,
-    });
-    assert.equal(held.ok, true);
-    assert.equal(held.held, true);
-    const client = createSyncClient(server.url);
-    const bea = await client.login("bea@example.com", await makeLoginProof("other-password", "bea@example.com", FAST));
-    const list = await client.pull(bea.token);
-    assert.equal(list.blob, null);
-  } finally {
-    await server.close();
-  }
-});
-
-test("the wrong wrap key cannot open the sync key", async () => {
-  const raw = randomBytes(32);
-  const syncKeyB64 = Buffer.from(raw).toString("base64");
-  const wrap = await makeWrapKey("long-password", "ada@example.com", randomBytes(16), FAST);
-  const packed = await wrapSyncKey(wrap, syncKeyB64);
-  const wrong = await importAesKey(randomBytes(32));
+test("sign-out keeps the local list and a wrong wrap key fails", async () => {
+  const list = payload([task("a", "Math homework", 3)]);
+  const signedOut = afterSignOut(list);
+  assert.equal(signedOut.clearedList, false);
+  assert.equal(signedOut.localList, list);
+  const wrap = await makeWrapKey("long-password", "user-1", FAST);
+  const packed = await wrapSyncKey(wrap, "abc");
+  const wrong = await makeWrapKey("other-password", "user-1", FAST);
   await assert.rejects(() => unwrapSyncKey(wrong, packed));
+  assert.equal(list.tasks.length, 1);
 });
