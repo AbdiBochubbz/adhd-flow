@@ -14,20 +14,28 @@ export function randomBytes(size) {
 }
 
 export async function deriveKey(secret, salt, iterations = ITERATIONS) {
+  const bits = await deriveBits(secret, salt, iterations);
+  return importAesKey(bits);
+}
+
+export async function deriveBits(secret, salt, iterations = ITERATIONS, length = 256) {
   const material = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
     "PBKDF2",
     false,
-    ["deriveKey"],
+    ["deriveBits"],
   );
-  return crypto.subtle.deriveKey(
+  const bits = await crypto.subtle.deriveBits(
     { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
     material,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"],
+    length,
   );
+  return new Uint8Array(bits);
+}
+
+export function importAesKey(raw) {
+  return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
 }
 
 export async function encryptJson(key, value) {

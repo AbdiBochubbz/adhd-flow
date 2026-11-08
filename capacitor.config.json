@@ -5,6 +5,10 @@
   "android": {
     "allowMixedContent": false
   },
+  "server": {
+    "androidScheme": "https",
+    "hostname": "localhost"
+  },
   "plugins": {
     "LocalNotifications": {
       "smallIcon": "ic_stat_still",

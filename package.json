@@ -12,6 +12,7 @@
     "cap:sync": "npm run build && cap sync android",
     "android:debug": "npm run cap:sync && cd android && ./gradlew assembleDebug",
     "presence": "node server/presence.mjs",
+    "account": "node server/account.mjs",
     "desktop:win": "npm run build && electron-builder --win portable --x64"
   },
   "main": "electron/main.cjs",

@@ -9,12 +9,29 @@ import {
   makeVerifier,
   randomBytes,
 } from "./crypto.js";
-import { clearStores, commitVault, deleteDatabase, readVaultRecord, setFails, setNotifTitles } from "./db.js";
+import { clearStores, commitVault, deleteDatabase, kvDelete, kvGet, kvSet, readVaultRecord, setFails, setNotifTitles } from "./db.js";
 import { sanitizePayload } from "./model.js";
+
+export function vaultRecordState(record) {
+  const salt = Boolean(record?.salt);
+  const verifier = Boolean(record?.verifier);
+  const vault = Boolean(record?.vault);
+  if (salt && verifier && vault) return "ready";
+  if (salt || verifier || vault) return "partial";
+  return "empty";
+}
+
+export function assertCanCreate(record, replace = false) {
+  if (vaultRecordState(record) !== "empty" && !replace) {
+    const error = new Error("A vault is already on this device.");
+    error.code = "vault-exists";
+    throw error;
+  }
+}
 
 export async function vaultExists() {
   const record = await readVaultRecord();
-  return Boolean(record.salt && record.verifier && record.vault);
+  return vaultRecordState(record) === "ready";
 }
 
 export async function readFails() {
@@ -22,7 +39,10 @@ export async function readFails() {
   return record.fails || { count: 0, until: 0 };
 }
 
-export async function createVault(secret, payload) {
+export async function createVault(secret, payload, { replace = false } = {}) {
+  const existing = await readVaultRecord();
+  assertCanCreate(existing, replace);
+  if (replace && vaultRecordState(existing) !== "empty") await keepPreviousVault(existing);
   const clean = sanitizePayload(payload);
   const salt = randomBytes(16);
   const key = await deriveKey(secret, salt, ITERATIONS);
@@ -87,9 +107,54 @@ export async function noteFailedAttempt() {
   return next;
 }
 
+export async function keepPreviousVault(record = null) {
+  const current = record || (await readVaultRecord());
+  if (vaultRecordState(current) === "empty") return false;
+  await kvSet("vault-previous", {
+    salt: current.salt,
+    iterations: current.iterations,
+    verifier: current.verifier,
+    vault: current.vault,
+    savedAt: Date.now(),
+  });
+  return true;
+}
+
+export async function hasPreviousVault() {
+  const previous = await kvGet("vault-previous");
+  return vaultRecordState(previous) === "ready";
+}
+
+/** Swap the live vault with the copy taken before the last import. Does not delete either copy. */
+export async function restorePreviousVault() {
+  const previous = await kvGet("vault-previous");
+  if (vaultRecordState(previous) !== "ready") return false;
+  const current = await readVaultRecord();
+  await commitVault({
+    salt: previous.salt,
+    iterations: previous.iterations,
+    verifier: previous.verifier,
+    vault: previous.vault,
+  });
+  if (vaultRecordState(current) === "ready") {
+    await kvSet("vault-previous", {
+      salt: current.salt,
+      iterations: current.iterations,
+      verifier: current.verifier,
+      vault: current.vault,
+      savedAt: Date.now(),
+    });
+  }
+  return true;
+}
+
 export async function eraseVault() {
   await clearStores();
   await deleteDatabase();
+}
+
+export async function clearSyncSession() {
+  await kvDelete("sync-session");
 }
 
 export function backupFromRecord(record) {

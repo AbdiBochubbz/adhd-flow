@@ -673,6 +673,87 @@ function segment(label, action, current, options) {
   );
 }
 
+function accountBlock(state) {
+  const account = state.account || {};
+  const configured = Boolean(String(account.url || "").trim());
+  const signedIn = account.status === "signed-in";
+  return h(
+    "div",
+    { class: "settings-block" },
+    h("h2", {}, "Account"),
+    h("p", { class: "help" }, account.detail || "Sync is not connected. Tasks stay on this device."),
+    h("label", { class: "field-label", for: "account-url" }, "Account server"),
+    h("input", {
+      id: "account-url",
+      class: "field",
+      value: account.url || "",
+      placeholder: "https://your-server",
+      spellcheck: "false",
+      autocapitalize: "off",
+    }),
+    h("button", { class: "btn-ghost", dataset: { action: "account-save-url" } }, configured ? "Save server address" : "Keep sync off"),
+    configured
+      ? null
+      : h(
+          "p",
+          { class: "fine" },
+          "This install has no account server. Nothing is uploaded. When you run one, paste its address here. An email address alone cannot open a list.",
+        ),
+    configured && !signedIn && !account.hold
+      ? h(
+          "div",
+          { class: "stack" },
+          h("label", { class: "field-label", for: "account-email" }, "Email"),
+          h("input", {
+            id: "account-email",
+            class: "field",
+            type: "email",
+            autocomplete: "username",
+            value: account.emailDraft || "",
+            placeholder: "you@example.com",
+          }),
+          h("label", { class: "field-label", for: "account-password" }, "Password"),
+          h("input", {
+            id: "account-password",
+            class: "field",
+            type: "password",
+            autocomplete: "current-password",
+            value: account.passwordDraft || "",
+          }),
+          h(
+            "button",
+            { class: "btn-primary", dataset: { action: "account-login" }, disabled: account.busy },
+            account.busy ? "Checking…" : "Sign in",
+          ),
+          h(
+            "button",
+            { class: "btn-ghost", dataset: { action: "account-register" }, disabled: account.busy },
+            "Create account",
+          ),
+          h("p", { class: "fine" }, "The password is not your PIN. It is not saved on this device. The server stores a login proof and ciphertext, not your tasks in the clear."),
+        )
+      : null,
+    signedIn
+      ? h(
+          "div",
+          { class: "stack" },
+          h("p", {}, account.email ? `Signed in as ${account.email}.` : "Signed in."),
+          h("button", { class: "btn-quiet", dataset: { action: "account-logout" } }, "Sign out"),
+          h("p", { class: "fine" }, "Signing out leaves the list on this device. It does not erase it."),
+        )
+      : null,
+    account.hold
+      ? h(
+          "div",
+          { class: "stack" },
+          h("button", { class: "btn-primary", dataset: { action: "account-keep" } }, "Keep this device’s list"),
+          h("button", { class: "btn-ghost", dataset: { action: "account-merge" } }, "Merge both lists"),
+          h("button", { class: "btn-quiet", dataset: { action: "account-use-remote" } }, "Use the account list"),
+        )
+      : null,
+  );
+}
+
 function settingsView(state) {
   const caps = state.caps || {};
   const permission = state.notificationPermission;
@@ -770,7 +851,7 @@ function settingsView(state) {
               : "Periodic background sync isn’t available. Still can’t ask the phone to wake a closed site on a timer.",
           ),
       state.native
-        ? h("p", {}, "There is still no account and no server. The home-screen widget can add a task. It shows the task name only when Show task names is on.")
+        ? h("p", {}, "The home-screen widget can add a task. It shows the task name only when Show task names is on.")
         : h("p", {}, "A static app has no push server. Android will not reliably wake a website that is fully closed. The dependable habit is to open Still in the morning."),
       state.background?.periodic ? h("p", { class: "fine" }, "Background check: registered.") : null,
       state.swError ? h("p", { class: "fine" }, "The offline worker didn’t start. The list still saves on this phone.") : null,
@@ -791,6 +872,7 @@ function settingsView(state) {
               : null,
           ),
     ),
+    accountBlock(state),
     h(
       "div",
       { class: "settings-block" },
@@ -802,6 +884,9 @@ function settingsView(state) {
         h("button", { class: "btn-ghost", dataset: { action: "import" } }, "Restore a backup"),
         h("button", { class: "btn-ghost", dataset: { action: "plaintext" } }, "Download a readable copy"),
         h("button", { class: "btn-ghost", dataset: { action: "change-pin" } }, "Change PIN"),
+        state.hasPrevious
+          ? h("button", { class: "btn-ghost", dataset: { action: "restore-previous" } }, "Restore the copy from before the last import")
+          : null,
         h("button", { class: "btn-quiet", dataset: { action: "lock" } }, "Lock now"),
         h("button", { class: "btn-danger", dataset: { action: "erase" } }, "Erase everything"),
       ),
@@ -810,7 +895,7 @@ function settingsView(state) {
         "div",
         { class: "prose" },
         h("h2", {}, "Privacy"),
-        h("p", {}, "Tasks live in IndexedDB on this device, encrypted with AES-GCM. The key is derived from your PIN with PBKDF2 and is not stored. There are no accounts, no analytics, and no third-party scripts."),
+        h("p", {}, "Tasks live in IndexedDB on this device, encrypted with AES-GCM. The key is derived from your PIN with PBKDF2 and is not stored. Sync, if you turn it on, sends ciphertext to a server you choose. The PIN is not the account password, and the email alone cannot open the list."),
         h("p", {}, "A weak PIN can still be guessed if someone copies the browser’s storage. Auto-lock covers the time the app is sitting open. Forgetting the PIN means the tasks cannot be read — only erased."),
       ),
     ),
@@ -934,13 +1019,20 @@ function gate(state) {
       : null,
     setup && state.setupStep === "create"
       ? h(
+          "p",
+          { class: "help" },
+          "If this phone already had tasks, they are still in the app where you created them. Don’t uninstall or clear storage. Open that copy and download an encrypted backup.",
+        )
+      : null,
+    setup && state.setupStep === "create"
+      ? h(
           "details",
           {},
           h("summary", {}, "How this stays private"),
           h(
             "p",
             { class: "fine" },
-            "No account. No server. The list is encrypted on this device. Voice, if you use it, is the one exception: Chrome may send that phrase to its speech service.",
+            "The list is encrypted on this device before anything else. An account is optional, and only a server you choose can store ciphertext. Voice, if you use it, is the one exception: Chrome may send that phrase to its speech service.",
           ),
         )
       : null,
@@ -1338,6 +1430,20 @@ function classroom(state) {
 export function renderScreen(state) {
   const now = new Date();
   const shell = { class: "frame", "data-daypart": daypart(now) };
+  if (state.screen === "partial") {
+    return h(
+      "div",
+      shell,
+      h(
+        "section",
+        { class: "gate" },
+        h("h1", {}, "Still"),
+        h("p", { class: "lede" }, "Part of a vault is on this device. Still will not replace it with an empty list."),
+        h("p", { class: "help" }, "Don’t uninstall or clear storage. You can download the record that is here. It stays encrypted, and it does not include the PIN."),
+        h("button", { class: "btn-primary", dataset: { action: "export-partial" } }, "Download the vault record"),
+      ),
+    );
+  }
   if (state.screen === "error") {
     return h(
       "div",

@@ -47,6 +47,15 @@ export async function kvSet(key, value) {
   }
 }
 
+export async function kvDelete(key) {
+  const db = await openDB();
+  try {
+    await requestToPromise(db.transaction("kv", "readwrite").objectStore("kv").delete(key));
+  } finally {
+    db.close();
+  }
+}
+
 /** Atomic replace of the vault header. A crash mid-write cannot mix old salt with new ciphertext. */
 export async function commitVault({ salt, iterations, verifier, vault }) {
   const db = await openDB();

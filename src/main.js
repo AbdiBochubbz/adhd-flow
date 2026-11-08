@@ -1,5 +1,7 @@
+import { connectAccount, createSyncClient, openSyncKey, pushPlan, syncExisting } from "./account.js";
+import { mergePayloads } from "./merge.js";
 import { checkVerifier, decryptJson, deriveKey } from "./crypto.js";
-import { commitVault, readVaultRecord } from "./db.js";
+import { commitVault, kvGet, kvSet, readVaultRecord } from "./db.js";
 import { freshComposer, draftFrom, previewCopy } from "./draft.js";
 import { DONE_PHRASES, createTask, defaultSettings, openCount, sanitizePayload } from "./model.js";
 import {
@@ -23,14 +25,18 @@ import { parseTask } from "./parse.js";
 import {
   backupFromRecord,
   changeSecret,
+  clearSyncSession,
   createVault,
   eraseVault,
+  hasPreviousVault,
+  keepPreviousVault,
   noteFailedAttempt,
   openVault,
   parseBackup,
   readFails,
+  restorePreviousVault,
   saveVault,
-  vaultExists,
+  vaultRecordState,
 } from "./vault.js";
 import { renderScreen } from "./views.js";
 import { speechSupported, startListening, voiceErrorCopy } from "./voice.js";
@@ -107,6 +113,24 @@ const state = {
   changeB: "",
   importPin: "",
   importBackup: null,
+  tombstones: [],
+  accountEmail: "",
+  syncKeyB64: "",
+  syncKey: null,
+  hasPrevious: false,
+  vaultPartial: false,
+  account: {
+    url: "",
+    emailDraft: "",
+    passwordDraft: "",
+    email: "",
+    status: "unconfigured",
+    detail: "Sync is not connected. Tasks stay on this device.",
+    busy: false,
+    revision: 0,
+    dirty: false,
+    hold: null,
+  },
   phraseIndex: 0,
   lastActivity: Date.now(),
   hiddenAt: 0,
@@ -208,13 +232,17 @@ function snapshot() {
       steps: (task.steps || []).map((step) => ({ ...step })),
     })),
     settings: { ...state.settings },
+    tombstones: state.tombstones.map((item) => ({ ...item })),
+    accountEmail: state.accountEmail || "",
+    syncKeyB64: state.syncKeyB64 || "",
   };
 }
 
 let sealing = false;
 
-function persist() {
+function persist({ quiet = false } = {}) {
   if (sealing || !state.key) return saveChain;
+  if (!quiet) state.account.dirty = true;
   const data = snapshot();
   const run = async () => {
     if (!state.key) return;
@@ -226,6 +254,7 @@ function persist() {
     } catch {
       /* private mode can refuse storage that isn't IndexedDB */
     }
+    if (!quiet) scheduleSync();
   };
   saveChain = saveChain.then(run, run);
   return saveChain;
@@ -388,6 +417,7 @@ function commitEdit() {
   state.tasks[index] = {
     ...task,
     title,
+    updatedAt: Date.now(),
     reminders: { ...state.edit.reminders },
     steps: state.edit.steps.map((step) => ({ ...step })),
   };
@@ -437,7 +467,9 @@ function completeTask(id) {
   const task = findTask(id);
   if (!task || task.completedAt) return;
   const previous = task.completedAt;
+  const previousUpdated = task.updatedAt;
   task.completedAt = Date.now();
+  task.updatedAt = task.completedAt;
   task.deferredUntil = null;
   state.sheet = null;
   state.edit = null;
@@ -445,7 +477,10 @@ function completeTask(id) {
   persist();
   celebrate(nextPhrase(), () => {
     const current = findTask(id);
-    if (current) current.completedAt = previous;
+    if (current) {
+      current.completedAt = previous;
+      current.updatedAt = previousUpdated;
+    }
     persist();
   });
 }
@@ -570,6 +605,17 @@ async function enterApp(key, data) {
   state.key = key;
   state.tasks = data.tasks;
   state.settings = data.settings;
+  state.tombstones = data.tombstones || [];
+  state.accountEmail = data.accountEmail || "";
+  state.syncKeyB64 = data.syncKeyB64 || "";
+  state.syncKey = null;
+  if (state.syncKeyB64) {
+    try {
+      state.syncKey = await openSyncKey(state.syncKeyB64);
+    } catch {
+      state.syncKey = null;
+    }
+  }
   state.hasVault = true;
   state.screen = "app";
   state.pinBuffer = "";
@@ -588,6 +634,7 @@ async function enterApp(key, data) {
   if (!opened) maybeSummary();
   render();
   await syncSchedule(state.tasks, state.settings, notificationHooks);
+  runSync({ force: true });
   state.background = await registerBackgroundWork();
   state.caps = await probeCapabilities();
   refreshPermission();
@@ -647,8 +694,12 @@ async function pinSubmit() {
       state.fails = await noteFailedAttempt();
       state.error = "That PIN didn’t open the vault.";
       state.shake = true;
+    } else if (error?.code === "vault-exists") {
+      state.hasVault = true;
+      state.screen = "lock";
+      state.error = "A list is already on this device, so a new PIN was not saved over it.";
     } else {
-      state.error = "The vault couldn’t be opened.";
+      state.error = "The vault couldn’t be opened. Nothing was erased.";
     }
     render();
     return;
@@ -671,7 +722,16 @@ async function lock() {
   }
   sealing = true;
   state.key = null;
+  state.syncKey = null;
+  state.syncKeyB64 = "";
+  state.account.passwordDraft = "";
+  const held = state.account.hold;
+  state.account.hold = null;
+  if (held?.session?.token && held.session.url) {
+    createSyncClient(held.session.url).logout(held.session.token).catch(() => {});
+  }
   state.tasks = [];
+  state.tombstones = [];
   state.settings = defaultSettings();
   state.screen = state.hasVault ? "lock" : "setup";
   state.sheet = null;
@@ -808,6 +868,8 @@ async function restoreImport() {
       return;
     }
     const data = sanitizePayload(await decryptJson(key, parsed.vault));
+    await keepPreviousVault();
+    state.hasPrevious = true;
     await commitVault({
       salt: parsed.salt,
       iterations: parsed.iterations,
@@ -1240,11 +1302,14 @@ function onClick(event) {
   if (action === "delete-task") {
     const id = button.dataset.id;
     const removed = findTask(id);
+    const tomb = { id, at: Date.now() };
     state.tasks = state.tasks.filter((task) => task.id !== id);
+    state.tombstones.push(tomb);
     state.sheet = null;
     state.edit = null;
     persist();
     showToast("Removed.", () => {
+      state.tombstones = state.tombstones.filter((item) => item !== tomb);
       if (removed) state.tasks.push(removed);
       persist();
     });
@@ -1279,6 +1344,7 @@ function onClick(event) {
   }
   if (action === "pomodoro") {
     state.settings.pomodoroMin = Number(button.dataset.value);
+    state.settings.settingsUpdatedAt = Date.now();
     if (!state.timer.running && state.timer.mode === "focus") {
       state.timer.durationMs = state.settings.pomodoroMin * 60 * 1000;
       state.timer.remainingMs = state.timer.durationMs;
@@ -1289,6 +1355,7 @@ function onClick(event) {
   }
   if (action === "break-length") {
     state.settings.breakMin = Number(button.dataset.value);
+    state.settings.settingsUpdatedAt = Date.now();
     if (!state.timer.running && state.timer.mode === "break") {
       state.timer.durationMs = state.settings.breakMin * 60 * 1000;
       state.timer.remainingMs = state.timer.durationMs;
@@ -1299,6 +1366,7 @@ function onClick(event) {
   }
   if (action === "theme") {
     state.settings.theme = button.dataset.value;
+    state.settings.settingsUpdatedAt = Date.now();
     applyTheme(state.settings.theme);
     persist();
     render();
@@ -1306,12 +1374,14 @@ function onClick(event) {
   }
   if (action === "autolock") {
     state.settings.autoLockMin = Number(button.dataset.value);
+    state.settings.settingsUpdatedAt = Date.now();
     persist();
     render();
     return;
   }
   if (action === "toggle-titles") {
     state.settings.showTitlesInNotifications = !state.settings.showTitlesInNotifications;
+    state.settings.settingsUpdatedAt = Date.now();
     persist();
     render();
     return;
@@ -1322,6 +1392,38 @@ function onClick(event) {
   }
   if (action === "lock") {
     lock();
+    return;
+  }
+  if (action === "account-save-url") {
+    saveAccountUrl();
+    return;
+  }
+  if (action === "account-register" || action === "account-login") {
+    submitAccount(action === "account-register" ? "register" : "login");
+    return;
+  }
+  if (action === "account-logout") {
+    signOutAccount();
+    return;
+  }
+  if (action === "account-keep") {
+    keepPhoneList();
+    return;
+  }
+  if (action === "account-use-remote") {
+    useAccountList();
+    return;
+  }
+  if (action === "account-merge") {
+    mergeAccountList();
+    return;
+  }
+  if (action === "restore-previous") {
+    restoreEarlierCopy();
+    return;
+  }
+  if (action === "export-partial") {
+    exportPartial();
     return;
   }
   if (action === "export") {
@@ -1447,9 +1549,13 @@ function onChange(event) {
   }
   if (target.id === "morning-hour") {
     state.settings.morningHour = Number(target.value);
+    state.settings.settingsUpdatedAt = Date.now();
     persist();
     return;
   }
+  if (target.id === "account-url") state.account.url = target.value;
+  if (target.id === "account-email") state.account.emailDraft = target.value;
+  if (target.id === "account-password") state.account.passwordDraft = target.value;
   if (target.id === "import-file") {
     const file = target.files?.[0];
     target.value = "";
@@ -1688,6 +1794,281 @@ function registerServiceWorker() {
   });
 }
 
+let syncTimer = null;
+
+function scheduleSync() {
+  if (!state.account.dirty || !state.syncKey || state.account.hold || state.screen !== "app") return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => {
+    runSync();
+  }, 800);
+}
+
+async function runSync({ force = false } = {}) {
+  if (sealing || !state.key || !state.syncKey || state.account.hold) return;
+  if (!force && !state.account.dirty) return;
+  const session = await kvGet("sync-session");
+  if (!session?.token || !session.url) return;
+  state.account.busy = true;
+  try {
+    const outcome = await syncExisting({
+      client: createSyncClient(session.url),
+      token: session.token,
+      syncKey: state.syncKey,
+      local: snapshot(),
+      baseRevision: session.revision || 0,
+      dirty: state.account.dirty,
+    });
+    if (outcome.changed === false) {
+      state.account.status = "signed-in";
+      state.account.detail = outcome.message;
+      state.account.email = session.email || state.account.email;
+      state.account.revision = outcome.revision;
+      if (state.view === "settings") render();
+      return;
+    }
+    await applySynced(outcome, session);
+  } catch {
+    state.account.status = "offline";
+    state.account.detail = "Saved on this device. The account list was not applied, and nothing there was replaced.";
+    if (state.view === "settings") render();
+  } finally {
+    state.account.busy = false;
+  }
+}
+
+async function applySynced(outcome, session) {
+  const next = outcome.payload || snapshot();
+  session.revision = outcome.revision;
+  state.account.revision = outcome.revision;
+  state.account.email = session.email;
+  state.account.status = "signed-in";
+  state.account.detail = outcome.message;
+  state.account.hold = null;
+  await kvSet("sync-session", { ...session, revision: outcome.revision });
+  state.tasks = next.tasks || [];
+  state.settings = next.settings || state.settings;
+  state.tombstones = next.tombstones || [];
+  state.accountEmail = next.accountEmail || session.email;
+  if (next.syncKeyB64) state.syncKeyB64 = next.syncKeyB64;
+  state.account.dirty = false;
+  applyTheme(state.settings.theme);
+  await persist({ quiet: true });
+  render();
+}
+
+async function submitAccount(mode) {
+  if (state.account.busy) return;
+  const url = state.account.url.trim();
+  if (!url) {
+    state.account.detail = "Sync is not connected. Add the account server address first. Nothing was sent.";
+    render();
+    return;
+  }
+  state.account.busy = true;
+  state.account.detail = "Checking the account…";
+  render();
+  const password = state.account.passwordDraft;
+  state.account.passwordDraft = "";
+  const local = snapshot();
+  const result = await connectAccount({
+    url,
+    email: state.account.emailDraft,
+    password,
+    mode,
+    local,
+  });
+  state.account.busy = false;
+  if (!result.ok) {
+    state.account.detail = result.message;
+    render();
+    return;
+  }
+  if (result.held) {
+    state.account.hold = result;
+    state.account.status = "held";
+    state.account.detail = result.message;
+    render();
+    return;
+  }
+  state.syncKeyB64 = result.syncKeyB64;
+  state.syncKey = await openSyncKey(result.syncKeyB64);
+  await applySynced({ payload: result.payload, revision: result.session.revision, message: result.message }, result.session);
+  showToast(result.message);
+}
+
+async function saveAccountUrl() {
+  const url = state.account.url.trim();
+  state.account.url = url;
+  try {
+    localStorage.setItem("still-sync-url", url);
+  } catch {
+    /* the address can still be used for this visit */
+  }
+  await signOutAccount({ keepDetail: true });
+  if (!url) {
+    state.account.status = "unconfigured";
+    state.account.detail = "Sync is not connected. No account server is set, so tasks stay on this device.";
+  } else {
+    state.account.status = "signed-out";
+    state.account.detail = "Server address saved. Sign in when you are ready. Nothing has been uploaded.";
+  }
+  render();
+}
+
+async function signOutAccount({ keepDetail = false } = {}) {
+  const session = await kvGet("sync-session").catch(() => null);
+  const held = state.account.hold?.session;
+  for (const item of [session, held]) {
+    if (!item?.token || !item.url) continue;
+    try {
+      await createSyncClient(item.url).logout(item.token);
+    } catch {
+      /* signing out locally still drops the token */
+    }
+  }
+  await clearSyncSession().catch(() => {});
+  state.syncKey = null;
+  state.account.hold = null;
+  state.account.email = "";
+  state.account.busy = false;
+  state.account.revision = 0;
+  if (!keepDetail) {
+    state.account.status = state.account.url ? "signed-out" : "unconfigured";
+    state.account.detail = "Signed out. The list is still on this device.";
+    render();
+  }
+}
+
+async function keepPhoneList() {
+  await signOutAccount();
+  state.account.detail = "Kept this device’s list. That account was not changed.";
+  render();
+}
+
+async function useAccountList() {
+  const held = state.account.hold;
+  const remote = held?.remote;
+  if (!held || !remote?.tasks?.length) {
+    state.account.detail = "The account list is empty, so this device was not replaced.";
+    render();
+    return;
+  }
+  await keepPreviousVault();
+  state.hasPrevious = true;
+  state.syncKeyB64 = held.syncKeyB64;
+  state.syncKey = await openSyncKey(held.syncKeyB64);
+  const payload = {
+    ...remote,
+    accountEmail: held.session.email,
+    syncKeyB64: held.syncKeyB64,
+  };
+  await applySynced(
+    { payload, revision: held.remoteRevision || held.session.revision || 0, message: "Using the account list. The previous copy is still on this device." },
+    held.session,
+  );
+}
+
+async function mergeAccountList() {
+  const held = state.account.hold;
+  if (!held?.session) return;
+  state.syncKeyB64 = held.syncKeyB64;
+  state.syncKey = await openSyncKey(held.syncKeyB64);
+  const local = { ...snapshot(), accountEmail: held.session.email, syncKeyB64: held.syncKeyB64 };
+  const merged = mergePayloads(local, held.remote || { tasks: [], tombstones: [], settings: local.settings });
+  try {
+    const outcome = await pushPlan({
+      client: createSyncClient(held.session.url),
+      token: held.session.token,
+      syncKey: state.syncKey,
+      syncKeyB64: held.syncKeyB64,
+      local: { ...merged, accountEmail: held.session.email, syncKeyB64: held.syncKeyB64 },
+      remote: held.remote,
+      baseRevision: 0,
+      remoteRevision: held.remoteRevision || 0,
+      dirty: true,
+      wrapped: null,
+    });
+    await applySynced(outcome, held.session);
+  } catch {
+    state.account.detail = "Could not merge. This device was not replaced, and the account was left as it was.";
+    state.account.hold = held;
+    render();
+  }
+}
+
+async function restoreEarlierCopy() {
+  sealing = true;
+  clearTimeout(saveTimer);
+  state.key = null;
+  state.syncKey = null;
+  const ok = await restorePreviousVault();
+  sealing = false;
+  if (!ok) {
+    showToast("There is no earlier copy on this device.");
+    return;
+  }
+  state.tasks = [];
+  state.tombstones = [];
+  state.hasVault = true;
+  state.screen = "lock";
+  state.sheet = null;
+  showToast("Restored the earlier copy. Unlock it with the PIN from that copy.");
+  render();
+}
+
+async function exportPartial() {
+  const record = await readVaultRecord();
+  download(
+    `still-partial-${dayKey(new Date())}.json`,
+    JSON.stringify(
+      {
+        format: "still-partial",
+        warning: "This is the raw vault record from this device. It does not include the PIN.",
+        exportedAt: new Date().toISOString(),
+        record: backupFromRecord({
+          ...record,
+          iterations: record.iterations || 210000,
+          salt: record.salt || new Uint8Array(),
+          verifier: record.verifier || { iv: new Uint8Array(), ct: new Uint8Array() },
+          vault: record.vault || { iv: new Uint8Array(), ct: new Uint8Array() },
+        }),
+      },
+      null,
+      2,
+    ),
+  );
+  showToast("Downloaded the vault record that is on this device. Nothing was deleted.");
+}
+
+async function loadAccountSession() {
+  try {
+    state.account.url = localStorage.getItem("still-sync-url") || "";
+  } catch {
+    state.account.url = "";
+  }
+  let session = null;
+  try {
+    session = await kvGet("sync-session");
+  } catch {
+    session = null;
+  }
+  if (!state.account.url) {
+    state.account.status = "unconfigured";
+    state.account.detail = "Sync is not connected. No account server is set, so tasks stay on this device.";
+    return;
+  }
+  if (session?.token && session.url === state.account.url) {
+    state.account.status = "signed-in";
+    state.account.email = session.email || "";
+    state.account.revision = session.revision || 0;
+    state.account.detail = "Signed in. The list syncs after you unlock.";
+    return;
+  }
+  state.account.status = "signed-out";
+  state.account.detail = "A server address is saved. You are signed out, so tasks stay on this device.";
+}
+
 async function boot() {
   readLaunch();
   hydrateRoom();
@@ -1702,9 +2083,14 @@ async function boot() {
     return;
   }
   try {
-    state.hasVault = await vaultExists();
+    const record = await readVaultRecord();
+    const kind = vaultRecordState(record);
+    state.hasVault = kind === "ready";
+    state.vaultPartial = kind === "partial";
+    state.hasPrevious = await hasPreviousVault();
     state.fails = await readFails();
-    state.screen = state.hasVault ? "lock" : "setup";
+    await loadAccountSession();
+    state.screen = state.vaultPartial ? "partial" : state.hasVault ? "lock" : "setup";
   } catch {
     state.screen = "error";
     state.bootError = "On-device storage is blocked, so Still can’t keep a private vault here.";
@@ -1750,7 +2136,10 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("online", () => {
   state.online = true;
-  if (state.screen === "app") render();
+  if (state.screen === "app") {
+    render();
+    scheduleSync();
+  }
 });
 window.addEventListener("offline", () => {
   state.online = false;

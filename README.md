@@ -1,6 +1,6 @@
 # Still
 
-Still is a private, calm school-task list. It is an installable Progressive Web App: one task in front of you, small steps, a due time on every task, and reminders that stay on the phone. There is no account and no server. The list is encrypted in IndexedDB and never leaves the device.
+Still is a private, calm school-task list. It is an installable Progressive Web App: one task in front of you, small steps, a due time on every task, and reminders that stay on the phone. The list is encrypted in IndexedDB. It stays on that device unless you sign in to an account server you run yourself.
 
 ## Run it locally
 
@@ -18,6 +18,32 @@ npm run preview
 ```
 
 That preview is the same set of files GitHub Pages serves.
+
+## If a list looks missing
+
+Still does not delete the vault when a PIN is wrong, when decryption fails, or when a server cannot be reached. A new PIN cannot be saved over a vault that is already there.
+
+What can make the list look gone:
+
+- The website, the Android app, and the Windows app do not share storage. Each keeps its own encrypted database. The Android app’s database lives inside `app.still.tasks` at `https://localhost`. The website’s database lives on the site origin. Opening a different one shows a fresh setup screen even though the other copy is still there.
+- Debug APKs through 1.3 were signed by one Android debug key (SHA-256 `B6:B4:5D:71:FA:53:C4:18:65:80:EC:95:C7:25:A3:72:0A:E8:4E:0E:24:66:38:30:30:4D:49:1E:33:37:AB:A6`). That private key is not in this repository. An APK signed by a different key will not install over the app that has the data. Uninstalling the old app deletes the vault. Don’t uninstall, and don’t clear storage.
+- If the phone already uninstalled the app, the only copies that can still exist are an encrypted backup you downloaded, a readable export, or an Android backup of the same signed app. This project cannot see your phone.
+
+If the list is still on a device, open that same app, unlock it, and use **Download encrypted backup**. Restore that file on another copy with the same PIN. Still keeps the previous vault on the device when you restore, until you erase it yourself.
+
+## Account sync
+
+Sync is real only when the account server is running and you paste its address into Settings. This repository does not ship a hosted account, and the app will not pretend that it synced.
+
+```bash
+npm run account
+```
+
+That listens on `http://127.0.0.1:47323`. Put an `https://` address in Settings when the phone should reach it. Create an account with your email and a password of at least 8 characters. The password is not the PIN. The email alone is rejected. The server stores a hash of a login proof, a wrapped sync key, and ciphertext. It cannot read tasks.
+
+Sign-out leaves the local vault in place. A failed sign-in does not replace it. An empty account list does not wipe a device that already has tasks, and an empty device does not wipe an account that has tasks. Two devices on the same account merge by task. A different account is not given this device’s tasks unless you explicitly choose Merge or Use the account list.
+
+Mailbox ownership is not checked, because this server does not send email. Anyone who can open the server can try to register an address, but they still need the password. Host the process yourself and use HTTPS in front of it before putting a real address into the app.
 
 ## Deploy to GitHub Pages
 

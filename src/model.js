@@ -19,6 +19,7 @@ export function defaultSettings() {
     lastSummaryDay: null,
     askedNotify: false,
     voiceNoteSeen: false,
+    settingsUpdatedAt: 0,
   };
 }
 
@@ -30,6 +31,7 @@ export function createTask({ title, notes = "", dueAt, allDay, subject = "", rem
     dueAt,
     allDay: Boolean(allDay),
     createdAt: Date.now(),
+    updatedAt: Date.now(),
     completedAt: null,
     subject: subject.slice(0, 40),
     deferredUntil: null,
@@ -64,6 +66,7 @@ export function sanitizeTask(task) {
     dueAt: task.dueAt,
     allDay: Boolean(task.allDay),
     createdAt: typeof task.createdAt === "number" ? task.createdAt : Date.now(),
+    updatedAt: typeof task.updatedAt === "number" ? task.updatedAt : (typeof task.createdAt === "number" ? task.createdAt : Date.now()),
     completedAt: typeof task.completedAt === "number" ? task.completedAt : null,
     subject: typeof task.subject === "string" ? task.subject.slice(0, 40) : "",
     deferredUntil: typeof task.deferredUntil === "number" ? task.deferredUntil : null,
@@ -88,12 +91,23 @@ export function sanitizeSettings(raw) {
   settings.lastSummaryDay = typeof settings.lastSummaryDay === "string" ? settings.lastSummaryDay : null;
   settings.askedNotify = Boolean(settings.askedNotify);
   settings.voiceNoteSeen = Boolean(settings.voiceNoteSeen);
+  settings.settingsUpdatedAt = typeof settings.settingsUpdatedAt === "number" && Number.isFinite(settings.settingsUpdatedAt)
+    ? settings.settingsUpdatedAt
+    : 0;
   return settings;
 }
 
 export function sanitizePayload(data) {
   const tasks = Array.isArray(data?.tasks) ? data.tasks.map(sanitizeTask).filter(Boolean).slice(0, 500) : [];
-  return { v: 1, tasks, settings: sanitizeSettings(data?.settings) };
+  const tombstones = Array.isArray(data?.tombstones)
+    ? data.tombstones
+        .filter((item) => item && typeof item.id === "string" && item.id && typeof item.at === "number")
+        .slice(0, 500)
+        .map((item) => ({ id: item.id, at: item.at }))
+    : [];
+  const accountEmail = typeof data?.accountEmail === "string" ? data.accountEmail.slice(0, 254) : "";
+  const syncKeyB64 = typeof data?.syncKeyB64 === "string" && data.syncKeyB64.length < 200 ? data.syncKeyB64 : "";
+  return { v: 1, tasks, settings: sanitizeSettings(data?.settings), tombstones, accountEmail, syncKeyB64 };
 }
 
 export function urgencyOf(dueAt, now = new Date()) {
