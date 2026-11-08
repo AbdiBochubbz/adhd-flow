@@ -1,7 +1,8 @@
 import { connectAccount, createSyncClient, openSyncKey, pushPlan, syncExisting } from "./account.js";
 import { mergePayloads } from "./merge.js";
+import { decideBoot, mergeKeptLists, unlockLegacy } from "./migrate.js";
 import { checkVerifier, decryptJson, deriveKey } from "./crypto.js";
-import { commitVault, kvGet, kvSet, readVaultRecord } from "./db.js";
+import { kvGet, kvSet, readVaultRecord } from "./db.js";
 import { freshComposer, draftFrom, previewCopy } from "./draft.js";
 import { DONE_PHRASES, createTask, defaultSettings, openCount, sanitizePayload } from "./model.js";
 import {
@@ -24,19 +25,20 @@ import { dayKey, endOfDay, formatClock, fromDatetimeLocal } from "./time.js";
 import { parseTask } from "./parse.js";
 import {
   backupFromRecord,
-  changeSecret,
   clearSyncSession,
-  createVault,
   eraseVault,
-  hasPreviousVault,
+  archiveLegacy,
+  clearLiveLegacy,
   keepPreviousVault,
   noteFailedAttempt,
-  openVault,
   parseBackup,
   readFails,
-  restorePreviousVault,
-  saveVault,
+  readLegacyArchive,
+  readLocalList,
+  readLocalPrevious,
   vaultRecordState,
+  writeLocalList,
+  writeLocalPrevious,
 } from "./vault.js";
 import { renderScreen } from "./views.js";
 import { speechSupported, startListening, voiceErrorCopy } from "./voice.js";
@@ -119,6 +121,8 @@ const state = {
   syncKey: null,
   hasPrevious: false,
   vaultPartial: false,
+  legacyWaiting: false,
+  migrateFromSettings: false,
   account: {
     url: "",
     emailDraft: "",
@@ -241,12 +245,12 @@ function snapshot() {
 let sealing = false;
 
 function persist({ quiet = false } = {}) {
-  if (sealing || !state.key) return saveChain;
+  if (sealing || state.screen !== "app") return saveChain;
   if (!quiet) state.account.dirty = true;
   const data = snapshot();
   const run = async () => {
-    if (!state.key) return;
-    await saveVault(state.key, data);
+    if (state.screen !== "app") return;
+    await writeLocalList(data);
     await syncSchedule(data.tasks, data.settings, notificationHooks);
     await updateBadge(state.screen === "app" ? openCount(data.tasks) : 0);
     try {
@@ -601,9 +605,9 @@ function applyPending() {
   return false;
 }
 
-async function enterApp(key, data) {
-  state.key = key;
-  state.tasks = data.tasks;
+async function enterApp(data) {
+  state.key = null;
+  state.tasks = data.tasks || [];
   state.settings = data.settings;
   state.tombstones = data.tombstones || [];
   state.accountEmail = data.accountEmail || "";
@@ -642,8 +646,8 @@ async function enterApp(key, data) {
   render();
 }
 
-async function pinSubmit() {
-  if (state.cryptoBusy) return;
+async function migrateSubmit() {
+  if (state.cryptoBusy || state.screen !== "migrate") return;
   if (state.fails?.until > Date.now()) return;
   const secret = secretNow();
   if (secret.length < 4) {
@@ -652,102 +656,77 @@ async function pinSubmit() {
     render();
     return;
   }
-  if (state.screen === "setup" && state.setupStep === "create") {
-    state.pinFirst = secret;
-    state.setupStep = "confirm";
-    state.pinBuffer = "";
-    state.passphrase = "";
-    state.error = "";
-    state.weakPin = false;
-    render();
-    return;
-  }
-  if (state.screen === "setup" && secret !== state.pinFirst) {
-    state.error = "Those didn’t match. Enter it again.";
-    state.shake = true;
-    state.pinBuffer = "";
-    state.passphrase = "";
-    render();
-    return;
-  }
   state.cryptoBusy = true;
   state.error = "";
   render();
   await yieldPaint();
-  try {
-    if (state.screen === "setup") {
-      const settings = defaultSettings();
-      const stored = localStorage.getItem("still-theme");
-      if (stored === "dark" || stored === "light" || stored === "system") settings.theme = stored;
-      const key = await createVault(secret, { tasks: [], settings });
-      state.pinFirst = "";
-      await enterApp(key, { tasks: [], settings });
-    } else {
-      const opened = await openVault(secret);
-      await enterApp(opened.key, opened.data);
-    }
-  } catch (error) {
+  const record = await readVaultRecord();
+  const opened = await unlockLegacy(secret, record);
+  state.pinBuffer = "";
+  state.passphrase = "";
+  if (!opened.ok) {
     state.cryptoBusy = false;
-    state.pinBuffer = "";
-    state.passphrase = "";
-    if (error?.code === "bad-pin") {
+    if (opened.code === "bad-pin") {
       state.fails = await noteFailedAttempt();
-      state.error = "That PIN didn’t open the vault.";
+      state.error = "That PIN did not open the encrypted list. The copy is still on this device.";
       state.shake = true;
-    } else if (error?.code === "vault-exists") {
-      state.hasVault = true;
-      state.screen = "lock";
-      state.error = "A list is already on this device, so a new PIN was not saved over it.";
     } else {
-      state.error = "The vault couldn’t be opened. Nothing was erased.";
+      state.error = "That encrypted list could not be read. It was not deleted.";
     }
     render();
     return;
   }
+  try {
+    const current = state.migrateFromSettings ? snapshot() : null;
+    const merged = mergeKeptLists(current, opened.data);
+    await writeLocalList(merged);
+    const confirmed = await readLocalList();
+    if (!confirmed || confirmed.tasks.length < merged.tasks.length) {
+      throw new Error("save failed");
+    }
+    await archiveLegacy(record);
+    await clearLiveLegacy();
+    state.legacyWaiting = false;
+    state.migrateFromSettings = false;
+    state.cryptoBusy = false;
+    await enterApp(confirmed);
+    showToast("Those tasks are on this device now. The PIN is no longer used.");
+  } catch {
+    state.cryptoBusy = false;
+    state.error = "The tasks were read, but they could not be saved. The encrypted copy was not deleted.";
+    render();
+  }
+}
+
+async function continueWithoutLegacy() {
+  if (state.migrateFromSettings) {
+    state.screen = "app";
+    state.error = "";
+    render();
+    return;
+  }
+  const settings = defaultSettings();
+  try {
+    const stored = localStorage.getItem("still-theme");
+    if (stored === "dark" || stored === "light" || stored === "system") settings.theme = stored;
+  } catch {
+    /* ignore */
+  }
+  const saved = await writeLocalList({ tasks: [], settings, tombstones: [], accountEmail: "", syncKeyB64: "" });
+  state.legacyWaiting = true;
   state.cryptoBusy = false;
+  await enterApp(saved);
+  showToast("Started an empty list. The older encrypted copy is still on this device.");
 }
 
 async function lock() {
-  haltVoice();
-  if (state.timer.running) {
-    state.timer.remainingMs = Math.max(0, state.timer.endsAt - Date.now());
-    state.timer.running = false;
+  if (state.screen === "app") {
+    try {
+      await persist();
+    } catch {
+      /* stay on the list */
+    }
   }
-  clearTimeout(saveTimer);
-  if (state.sheet === "task") commitEdit();
-  try {
-    await persist();
-  } catch {
-    /* lock anyway */
-  }
-  sealing = true;
-  state.key = null;
-  state.syncKey = null;
-  state.syncKeyB64 = "";
-  state.account.passwordDraft = "";
-  const held = state.account.hold;
-  state.account.hold = null;
-  if (held?.session?.token && held.session.url) {
-    createSyncClient(held.session.url).logout(held.session.token).catch(() => {});
-  }
-  state.tasks = [];
-  state.tombstones = [];
-  state.settings = defaultSettings();
-  state.screen = state.hasVault ? "lock" : "setup";
-  state.sheet = null;
-  state.edit = null;
-  state.composer = freshComposer();
-  state.toast = "";
-  state.celebrate = "";
-  state.undo = null;
-  state.error = "";
-  state.pinBuffer = "";
-  state.passphrase = "";
-  state.cryptoBusy = false;
-  updateBadge(0);
-  applyTheme(localStorage.getItem("still-theme") || "system");
-  sealing = false;
-  render();
 }
 
 async function eraseEverything() {
@@ -765,8 +744,8 @@ async function eraseEverything() {
   state.key = null;
   state.tasks = [];
   state.hasVault = false;
-  state.screen = "setup";
-  state.setupStep = "create";
+  state.legacyWaiting = false;
+  state.screen = "app";
   state.sheet = null;
   state.edit = null;
   state.pinBuffer = "";
@@ -792,14 +771,15 @@ function download(filename, text) {
 }
 
 async function exportEncrypted() {
-  await persist();
-  const record = await readVaultRecord();
-  if (!record?.vault) {
-    showToast("Nothing to export yet.");
+  const archive = await readLegacyArchive();
+  const live = await readVaultRecord();
+  const record = vaultRecordState(archive) === "ready" ? archive : vaultRecordState(live) === "ready" ? live : null;
+  if (!record) {
+    showToast("This list is not PIN-encrypted. Download a readable copy instead.");
     return;
   }
   download(`still-backup-${dayKey(new Date())}.json`, JSON.stringify(backupFromRecord(record), null, 2));
-  showToast("Encrypted backup downloaded.");
+  showToast("Downloaded the older encrypted backup. Its PIN is not in the file.");
 }
 
 function exportPlain() {
@@ -868,53 +848,19 @@ async function restoreImport() {
       return;
     }
     const data = sanitizePayload(await decryptJson(key, parsed.vault));
-    await keepPreviousVault();
+    await writeLocalPrevious(snapshot());
     state.hasPrevious = true;
-    await commitVault({
-      salt: parsed.salt,
-      iterations: parsed.iterations,
-      verifier: parsed.verifier,
-      vault: parsed.vault,
-    });
+    const merged = mergeKeptLists(snapshot(), data);
+    const saved = await writeLocalList(merged);
     state.importBackup = null;
     state.importPin = "";
     state.cryptoBusy = false;
     state.sheet = null;
-    await enterApp(key, data);
-    showToast("Backup restored on this phone.");
+    await enterApp(saved);
+    showToast("Backup restored on this device. The file’s PIN is not used again.");
   } catch {
     state.cryptoBusy = false;
     state.error = "That backup couldn’t be restored.";
-    render();
-  }
-}
-
-async function updatePin() {
-  const first = state.changeA;
-  const second = state.changeB;
-  if (first.length < 4) {
-    state.error = "Use at least 4 characters.";
-    render();
-    return;
-  }
-  if (first !== second) {
-    state.error = "Those didn’t match.";
-    render();
-    return;
-  }
-  state.cryptoBusy = true;
-  render();
-  await yieldPaint();
-  try {
-    state.key = await changeSecret(first, { tasks: state.tasks, settings: state.settings });
-    state.changeA = "";
-    state.changeB = "";
-    state.cryptoBusy = false;
-    state.sheet = null;
-    showToast("PIN updated.");
-  } catch {
-    state.cryptoBusy = false;
-    state.error = "Couldn’t update the PIN.";
     render();
   }
 }
@@ -1046,7 +992,7 @@ function onClick(event) {
     return;
   }
   if (action === "pin-submit") {
-    pinSubmit();
+    migrateSubmit();
     return;
   }
   if (action === "toggle-passphrase") {
@@ -1390,8 +1336,17 @@ function onClick(event) {
     allowNotifications();
     return;
   }
-  if (action === "lock") {
-    lock();
+  if (action === "migrate-skip") {
+    continueWithoutLegacy();
+    return;
+  }
+  if (action === "migrate-retry") {
+    state.screen = "migrate";
+    state.migrateFromSettings = true;
+    state.error = "";
+    state.pinBuffer = "";
+    state.passphrase = "";
+    render();
     return;
   }
   if (action === "account-save-url") {
@@ -1444,15 +1399,7 @@ function onClick(event) {
     exportPlain();
     return;
   }
-  if (action === "change-pin") {
-    state.changeA = "";
-    state.changeB = "";
-    state.error = "";
-    state.sheet = "change-pin";
-    state.sheetReset = true;
-    render();
-    return;
-  }
+  if (action === "change-pin") return;
   if (action === "summary-start") {
     state.sheet = null;
     state.view = "focus";
@@ -1572,8 +1519,7 @@ function onSubmit(event) {
   event.preventDefault();
   const form = event.target;
   if (form.id === "add-form") submitComposer();
-  if (form.id === "pass-form") pinSubmit();
-  if (form.id === "change-pin-form") updatePin();
+  if (form.id === "pass-form") migrateSubmit();
   if (form.id === "import-form") restoreImport();
 }
 
@@ -1584,7 +1530,7 @@ function onKey(event) {
     return;
   }
   const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
-  if ((state.screen === "lock" || state.screen === "setup") && !state.passphraseMode && !typing) {
+  if (state.screen === "migrate" && !state.passphraseMode && !typing) {
     if (/^[0-9]$/.test(event.key)) {
       if (state.pinBuffer.length < 12 && !state.cryptoBusy) {
         state.pinBuffer += event.key;
@@ -1599,7 +1545,7 @@ function onKey(event) {
       render();
       return;
     }
-    if (event.key === "Enter") pinSubmit();
+    if (event.key === "Enter") migrateSubmit();
   }
   if (event.key === "Enter" && event.target?.id === "composer-text" && !event.shiftKey) {
     event.preventDefault();
@@ -1639,10 +1585,7 @@ function tick() {
 }
 
 function watchLock() {
-  if (state.screen !== "app" || state.cryptoBusy) return;
-  const minutes = state.settings.autoLockMin;
-  if (!minutes) return;
-  if (Date.now() - state.lastActivity >= minutes * 60 * 1000) lock();
+  /* The app no longer locks behind a PIN. */
 }
 
 let presenceHandle = null;
@@ -1998,23 +1941,15 @@ async function mergeAccountList() {
 }
 
 async function restoreEarlierCopy() {
-  sealing = true;
-  clearTimeout(saveTimer);
-  state.key = null;
-  state.syncKey = null;
-  const ok = await restorePreviousVault();
-  sealing = false;
-  if (!ok) {
-    showToast("There is no earlier copy on this device.");
+  const previous = await readLocalPrevious();
+  if (!previous) {
+    showToast("There is no earlier list on this device.");
     return;
   }
-  state.tasks = [];
-  state.tombstones = [];
-  state.hasVault = true;
-  state.screen = "lock";
+  const saved = await writeLocalList(previous);
   state.sheet = null;
-  showToast("Restored the earlier copy. Unlock it with the PIN from that copy.");
-  render();
+  await enterApp(saved);
+  showToast("Restored the list from before the last import.");
 }
 
 async function exportPartial() {
@@ -2085,12 +2020,29 @@ async function boot() {
   try {
     const record = await readVaultRecord();
     const kind = vaultRecordState(record);
-    state.hasVault = kind === "ready";
+    const localList = await readLocalList();
+    const decision = decideBoot({ localList, legacy: kind });
     state.vaultPartial = kind === "partial";
-    state.hasPrevious = await hasPreviousVault();
+    state.legacyWaiting = Boolean(localList) && kind !== "empty";
+    state.hasPrevious = Boolean(await readLocalPrevious());
     state.fails = await readFails();
     await loadAccountSession();
-    state.screen = state.vaultPartial ? "partial" : state.hasVault ? "lock" : "setup";
+    if (decision.screen === "migrate") {
+      state.screen = "migrate";
+      state.migrateFromSettings = false;
+    } else if (decision.fresh) {
+      const settings = defaultSettings();
+      try {
+        const stored = localStorage.getItem("still-theme");
+        if (stored === "dark" || stored === "light" || stored === "system") settings.theme = stored;
+      } catch {
+        /* ignore */
+      }
+      const saved = await writeLocalList({ tasks: [], settings, tombstones: [], accountEmail: "", syncKeyB64: "" });
+      await enterApp(saved);
+    } else {
+      await enterApp(decision.data);
+    }
   } catch {
     state.screen = "error";
     state.bootError = "On-device storage is blocked, so Still can’t keep a private vault here.";
@@ -2125,11 +2077,6 @@ document.addEventListener("visibilitychange", () => {
     return;
   }
   if (state.screen !== "app") return;
-  const minutes = state.settings.autoLockMin;
-  if (minutes && state.hiddenAt && Date.now() - state.hiddenAt >= minutes * 60 * 1000) {
-    lock();
-    return;
-  }
   if (state.timer.running && state.timer.endsAt <= Date.now()) finishTimer();
   if (!state.sheet) maybeSummary();
   flushDue(notificationHooks);

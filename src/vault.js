@@ -157,6 +157,55 @@ export async function clearSyncSession() {
   await kvDelete("sync-session");
 }
 
+export async function readLocalList() {
+  const value = await kvGet("local-list");
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return sanitizePayload(value);
+}
+
+export async function writeLocalList(payload) {
+  const clean = sanitizePayload(payload);
+  await kvSet("local-list", clean);
+  const saved = await readLocalList();
+  if (!saved) throw new Error("The list could not be saved.");
+  return saved;
+}
+
+export async function readLegacyArchive() {
+  return kvGet("legacy-archive");
+}
+
+export async function archiveLegacy(record) {
+  if (vaultRecordState(record) !== "ready") return false;
+  await kvSet("legacy-archive", {
+    salt: record.salt,
+    iterations: record.iterations,
+    verifier: record.verifier,
+    vault: record.vault,
+    savedAt: Date.now(),
+  });
+  const stored = await readLegacyArchive();
+  if (vaultRecordState(stored) !== "ready") throw new Error("The older encrypted copy could not be kept.");
+  return true;
+}
+
+export async function clearLiveLegacy() {
+  await kvDelete("salt");
+  await kvDelete("iterations");
+  await kvDelete("verifier");
+  await kvDelete("vault");
+}
+
+export async function readLocalPrevious() {
+  const value = await kvGet("local-previous");
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return sanitizePayload(value);
+}
+
+export async function writeLocalPrevious(payload) {
+  await kvSet("local-previous", sanitizePayload(payload));
+}
+
 export function backupFromRecord(record) {
   return {
     format: "still-backup",

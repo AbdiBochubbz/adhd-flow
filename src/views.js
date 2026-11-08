@@ -730,7 +730,7 @@ function accountBlock(state) {
             { class: "btn-ghost", dataset: { action: "account-register" }, disabled: account.busy },
             "Create account",
           ),
-          h("p", { class: "fine" }, "The password is not your PIN. It is not saved on this device. The server stores a login proof and ciphertext, not your tasks in the clear."),
+          h("p", { class: "fine" }, "This password is only for a server you configure. It does not prove you own the email, and no hosted account is connected in this install."),
         )
       : null,
     signedIn
@@ -765,8 +765,8 @@ function settingsView(state) {
       ? h(
           "div",
           { class: "update-banner" },
-          h("p", {}, "An update is ready. Still will lock, and you’ll enter your PIN again."),
-          h("button", { class: "btn-ghost", dataset: { action: "apply-update" } }, "Update and lock"),
+          h("p", {}, "An update is ready. Still will reload this page."),
+          h("button", { class: "btn-ghost", dataset: { action: "apply-update" } }, "Update"),
         )
       : null,
     h(
@@ -778,13 +778,7 @@ function settingsView(state) {
         ["light", "Light"],
         ["system", "Match phone"],
       ]),
-      segment("Auto-lock", "autolock", state.settings.autoLockMin, [
-        [1, "1 min"],
-        [5, "5 min"],
-        [15, "15 min"],
-        [0, "Off"],
-      ]),
-      h("p", { class: "fine" }, "Off keeps the list open until you lock it. Refreshing the page always locks it."),
+      h("p", { class: "fine" }, "Still stays open. There is no PIN lock."),
     ),
     h(
       "div",
@@ -883,11 +877,12 @@ function settingsView(state) {
         h("button", { class: "btn-ghost", dataset: { action: "export" } }, "Download encrypted backup"),
         h("button", { class: "btn-ghost", dataset: { action: "import" } }, "Restore a backup"),
         h("button", { class: "btn-ghost", dataset: { action: "plaintext" } }, "Download a readable copy"),
-        h("button", { class: "btn-ghost", dataset: { action: "change-pin" } }, "Change PIN"),
+        state.legacyWaiting
+          ? h("button", { class: "btn-ghost", dataset: { action: "migrate-retry" } }, "Open the older encrypted list")
+          : null,
         state.hasPrevious
           ? h("button", { class: "btn-ghost", dataset: { action: "restore-previous" } }, "Restore the copy from before the last import")
           : null,
-        h("button", { class: "btn-quiet", dataset: { action: "lock" } }, "Lock now"),
         h("button", { class: "btn-danger", dataset: { action: "erase" } }, "Erase everything"),
       ),
       h("input", { id: "import-file", class: "sr-only", type: "file", accept: "application/json,.json" }),
@@ -895,8 +890,8 @@ function settingsView(state) {
         "div",
         { class: "prose" },
         h("h2", {}, "Privacy"),
-        h("p", {}, "Tasks live in IndexedDB on this device, encrypted with AES-GCM. The key is derived from your PIN with PBKDF2 and is not stored. Sync, if you turn it on, sends ciphertext to a server you choose. The PIN is not the account password, and the email alone cannot open the list."),
-        h("p", {}, "A weak PIN can still be guessed if someone copies the browser’s storage. Auto-lock covers the time the app is sitting open. Forgetting the PIN means the tasks cannot be read — only erased."),
+        h("p", {}, "The current list is stored on this device without a PIN. Someone who can copy this device’s storage can read it. An older list, if one is still here, stays encrypted and cannot be opened without its PIN."),
+        h("p", {}, "An account password, if you add a server later, is separate. Email alone does not open the list, and this install is not connected to a hosted email service."),
       ),
     ),
   );
@@ -959,28 +954,31 @@ function pinPad(state) {
           disabled: waiting || state.cryptoBusy || state.pinBuffer.length < 4,
           dataset: { action: "pin-submit" },
         },
-        state.cryptoBusy ? "Opening the vault…" : state.screen === "setup" && state.setupStep === "create" ? "Continue" : state.screen === "setup" ? "Lock it in" : "Unlock",
+              state.cryptoBusy ? "Checking the PIN…" : "Keep those tasks",
       ),
     ),
   );
 }
 
-function gate(state) {
-  const setup = state.screen === "setup";
+function migrateScreen(state) {
+  const returning = state.migrateFromSettings;
   return h(
     "section",
     { class: "gate" },
     h("h1", {}, "Still"),
-    setup
-      ? h(
-          "p",
-          { class: "lede" },
-          state.setupStep === "confirm"
-            ? "Enter it once more."
-            : "School tasks, kept on this phone. A PIN locks them, and they’re encrypted.",
-        )
-      : h("p", { class: "lede" }, "Enter your PIN."),
-    state.passphraseMode
+    h(
+      "p",
+      { class: "lede" },
+      state.vaultPartial
+        ? "Part of an older encrypted list is on this device. It cannot be read, and it was not deleted."
+        : "An older encrypted list is on this device. Its PIN is needed once. Without that PIN, those tasks cannot be read.",
+    ),
+    state.vaultPartial
+      ? null
+      : h("p", { class: "help" }, "A wrong PIN leaves the encrypted copy where it is. Still will not erase it."),
+    state.vaultPartial
+      ? h("button", { class: "btn-ghost", dataset: { action: "export-partial" } }, "Download the encrypted record")
+      : state.passphraseMode
       ? h(
           "form",
           { id: "pass-form" },
@@ -989,7 +987,7 @@ function gate(state) {
             id: "passphrase",
             class: "field",
             type: "password",
-            autocomplete: setup ? "new-password" : "current-password",
+            autocomplete: "current-password",
             minlength: "4",
             maxlength: "128",
             value: state.passphrase,
@@ -1001,41 +999,30 @@ function gate(state) {
             h(
               "button",
               { class: "btn-primary", type: "submit", disabled: state.cryptoBusy },
-              state.cryptoBusy ? "Opening the vault…" : setup && state.setupStep === "create" ? "Continue" : setup ? "Lock it in" : "Unlock",
+              state.cryptoBusy ? "Checking the PIN…" : "Keep those tasks",
             ),
           ),
         )
       : pinPad(state),
+    state.vaultPartial
+      ? null
+      : h(
+          "button",
+          { class: "btn-quiet", dataset: { action: "toggle-passphrase" } },
+          state.passphraseMode ? "Use a PIN pad" : "Use an old passphrase",
+        ),
     h(
       "button",
-      { class: "btn-quiet", dataset: { action: "toggle-passphrase" } },
-      state.passphraseMode ? "Use a PIN pad" : "Use a passphrase",
+      { class: "btn-quiet", dataset: { action: "migrate-skip" } },
+      returning ? "Back to the current list" : "Continue with an empty list",
     ),
-    setup && state.setupStep === "confirm"
-      ? h("button", { class: "btn-quiet", dataset: { action: "setup-restart" } }, "Start over")
-      : null,
-    !setup && state.error
-      ? h("button", { class: "btn-quiet", dataset: { action: "forgot" } }, "Forgot it? Erase the vault")
-      : null,
-    setup && state.setupStep === "create"
-      ? h(
-          "p",
-          { class: "help" },
-          "If this phone already had tasks, they are still in the app where you created them. Don’t uninstall or clear storage. Open that copy and download an encrypted backup.",
-        )
-      : null,
-    setup && state.setupStep === "create"
-      ? h(
-          "details",
-          {},
-          h("summary", {}, "How this stays private"),
-          h(
-            "p",
-            { class: "fine" },
-            "The list is encrypted on this device before anything else. An account is optional, and only a server you choose can store ciphertext. Voice, if you use it, is the one exception: Chrome may send that phrase to its speech service.",
-          ),
-        )
-      : null,
+    h(
+      "p",
+      { class: "fine" },
+      returning
+        ? "Going back does not delete the encrypted copy."
+        : "An empty list does not delete the encrypted copy. You can try the PIN later from Settings.",
+    ),
   );
 }
 
@@ -1456,11 +1443,11 @@ export function renderScreen(state) {
       ),
     );
   }
-  if (state.screen === "setup" || state.screen === "lock") {
+  if (state.screen === "migrate") {
     return h(
       "div",
       shell,
-      gate(state),
+      migrateScreen(state),
       currentSheet(state, now),
       toast(state),
       h("div", { id: "live", class: "sr-only", "aria-live": "polite" }, state.live || ""),
@@ -1497,7 +1484,7 @@ export function renderScreen(state) {
         ),
         state.online ? null : h("p", { class: "offline-pill" }, "Offline. Your list is still here."),
       ),
-      h("button", { class: "icon-btn", "aria-label": "Lock", dataset: { action: "lock" } }, icon("lock")),
+      null,
     ),
     h("main", { class: "main", inert: state.sheet ? "" : null }, view),
     showFab && !state.sheet
