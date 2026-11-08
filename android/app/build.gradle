@@ -7,8 +7,8 @@ android {
         applicationId "app.still.tasks"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 15
-        versionName "1.5"
+        versionCode 16
+        versionName "1.6"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -17,11 +17,11 @@ android {
         }
     }
     def keystorePropertiesFile = rootProject.file("keystore.properties")
+    def keystoreProperties = new Properties()
     if (keystorePropertiesFile.exists()) {
-        def keystoreProperties = new Properties()
         keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
         signingConfigs {
-            release {
+            still {
                 storeFile rootProject.file(keystoreProperties["storeFile"])
                 storePassword keystoreProperties["storePassword"]
                 keyAlias keystoreProperties["keyAlias"]
@@ -30,11 +30,16 @@ android {
         }
     }
     buildTypes {
+        debug {
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.still
+            }
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             if (keystorePropertiesFile.exists()) {
-                signingConfig signingConfigs.release
+                signingConfig signingConfigs.still
             }
         }
     }

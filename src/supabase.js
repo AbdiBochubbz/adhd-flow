@@ -11,11 +11,25 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   },
 });
 
-export function authRedirectUrl() {
-  const url = new URL(window.location.href);
+/** Already allowed in Supabase. Confirmation mail opens this site, then the person signs in. */
+export const PUBLIC_SITE_URL = "https://abdibochubbz.github.io/adhd-flow/";
+
+/**
+ * The Android shell is served at https://localhost, and local preview uses 127.0.0.1.
+ * Those origins are not on the Supabase allow list. Send the confirmation link to the
+ * website instead of asking for a localhost wildcard or turning confirmation off.
+ */
+export function authRedirectFor(href, publicSite = PUBLIC_SITE_URL) {
+  const url = new URL(href);
   url.hash = "";
   url.search = "";
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return publicSite;
   return url.toString();
+}
+
+export function authRedirectUrl() {
+  return authRedirectFor(window.location.href);
 }
 
 export function supabaseVaultStore(client = supabase) {

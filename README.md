@@ -26,7 +26,7 @@ Still does not delete an older encrypted vault when a PIN is wrong, when decrypt
 What can make the list look gone:
 
 - The website, the Android app, and the Windows app do not share storage. The Android app’s database, if it was created, lives inside `app.still.tasks` at `https://localhost`. The website’s database lives on the site origin. Opening a different copy can show an empty list even when another copy still has tasks. That has not been checked on a phone.
-- Debug APKs through 1.3 were signed by one Android debug key (SHA-256 `B6:B4:5D:71:FA:53:C4:18:65:80:EC:95:C7:25:A3:72:0A:E8:4E:0E:24:66:38:30:30:4D:49:1E:33:37:AB:A6`). That private key is not in this repository, Dropbox, Drive, or the saved build artifacts. A differently signed APK will not install over the existing app. Uninstalling would delete whatever the app stored. No upgrade APK is being distributed.
+- Debug APKs through 1.3 were signed by one Android debug key (SHA-256 `B6:B4:5D:71:FA:53:C4:18:65:80:EC:95:C7:25:A3:72:0A:E8:4E:0E:24:66:38:30:30:4D:49:1E:33:37:AB:A6`). That private key is not in this repository. Still 1.6 is a fresh install signed with a new key, so Android will not install it over 1.0–1.3. Uninstall the old app first. That removes the old app’s on-device list. The new app does not delete anything by itself.
 - If the app was already removed, possible leftovers are an encrypted backup file, a readable export, or an Android backup of that same signed app. This project cannot see the phone.
 
 If an older installed copy still opens, its PIN can export an encrypted backup. Restoring that file asks for the PIN once. A wrong PIN does not replace the list on the device.
@@ -35,7 +35,7 @@ If an older installed copy still opens, its PIN can export an encrypted backup. 
 
 The account is the Still Supabase project at `https://irooqmewtvsfoqscwncs.supabase.co`. Sign-up asks Supabase to email a confirmation link. The list is not uploaded until that address is confirmed. Email confirmation was left on.
 
-The built-in Supabase mailer only delivers to members of the Supabase organization, about 2 messages an hour ([SMTP guide](https://supabase.com/docs/guides/auth/auth-smtp)). Other addresses need custom SMTP in Authentication → Emails. Redirect URLs must include every place the app runs: `http://127.0.0.1:47321/**`, `https://localhost/**`, and the GitHub Pages origin if that site is used. Add them under Authentication → URL Configuration. Do not turn off email confirmation.
+The built-in Supabase mailer only delivers to members of the Supabase organization, about 2 messages an hour ([SMTP guide](https://supabase.com/docs/guides/auth/auth-smtp)). Other addresses need custom SMTP in Authentication → Emails. The allowed redirect is the website, `https://abdibochubbz.github.io/adhd-flow/**`. The Android app runs at `https://localhost` inside its WebView, and local preview uses `http://127.0.0.1:47321`. Both send the confirmation link to that website. Open the link in a browser, then sign in inside the app or the site. Do not add a localhost wildcard, and do not turn off email confirmation.
 
 The database table `still_vaults` stores ciphertext only. Row level security allows each confirmed user to read and write their own row. Anonymous clients have no access, and there is no delete privilege. This has been checked with synthetic users that were rolled back. A full sign-up through a real inbox has not been run, so this is not yet a verified end-to-end sync.
 
@@ -73,7 +73,9 @@ The file is `android/app/build/outputs/apk/debug/app-debug.apk`.
 
 2. Copy that APK to the phone.
 3. Open it. If Android blocks the install, allow installs from that app (Files, Chrome, or Drive) under **Settings → Apps → Special app access → Install unknown apps**.
-4. Open Still, choose a PIN, and allow notifications when asked. On Android 12 and newer, also allow **Alarms & reminders** (Settings → Apps → Still → Alarms & reminders) if a reminder does not fire while the app is closed. This build declares `USE_EXACT_ALARM`, so a sideloaded install is usually allowed to ring on time without that extra step. A future Play Store build may have to drop that permission and rely on the toggle instead.
+4. Still 1.6 (`app.still.tasks`, versionCode 16) is a fresh install, not an update of 1.0–1.3. If an older Still is installed, uninstall that app first, then install this APK. Uninstalling removes the old app’s on-device list. A new install opens the task list with no PIN.
+5. Allow notifications when asked. On Android 12 and newer, also allow **Alarms & reminders** (Settings → Apps → Still → Alarms & reminders) if a reminder does not fire while the app is closed. This build declares `USE_EXACT_ALARM`, so a sideloaded install is usually allowed to ring on time without that extra step. A future Play Store build may have to drop that permission and rely on the toggle instead.
+6. To sync, open **Settings → Account**, create an account with an email you can read, confirm that email on the website, then sign in inside the app. Nothing is uploaded before the email is confirmed.
 
 Long-press the Still icon for **Add task** and **Speak task**.
 
