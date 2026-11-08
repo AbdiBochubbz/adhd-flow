@@ -55,7 +55,12 @@ export function precachePlugin() {
       };
       walk(dist);
       files.sort();
-      const cache = `still-${createHash("sha256").update(files.join("|")).digest("hex").slice(0, 12)}`;
+      const hash = createHash("sha256");
+      for (const rel of files) {
+        hash.update(rel);
+        hash.update(fs.readFileSync(path.join(dist, rel)));
+      }
+      const cache = `still-${hash.digest("hex").slice(0, 12)}`;
       const swPath = path.join(dist, "sw.js");
       let sw = fs.readFileSync(swPath, "utf8");
       if (!sw.includes("__CACHE__") || !sw.includes("__PRECACHE__")) {
