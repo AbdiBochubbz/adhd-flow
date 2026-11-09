@@ -20,7 +20,7 @@ import {
 } from "./notify.js";
 import { clearWidget, isNative, nativeActionFromUrl, startNativeListening, watchNativeLinks } from "./native.js";
 import { studyPhase } from "./study.js";
-import { connectPresence } from "./presence.js";
+import { connectPresence, presenceTarget } from "./presence.js";
 import { inviteLink } from "./room.js";
 import { dayKey, endOfDay, formatClock, fromDatetimeLocal } from "./time.js";
 import { parseTask } from "./parse.js";
@@ -85,7 +85,7 @@ const state = {
     status: "idle",
     error: "",
     mode: "public",
-    modeLabel: "local",
+    modeLabel: "hosted",
     displayName: "",
     chibi: "pebbles",
     codeInput: "",
@@ -1616,8 +1616,7 @@ function publishRoomFocus() {
 }
 
 function ensurePresence() {
-  const url = state.room.serverUrl.trim();
-  const key = url || "local";
+  const key = presenceTarget(state.room.serverUrl);
   if (presenceHandle && presenceHandle.key === key) return presenceHandle;
   presenceHandle?.close();
   presenceHandle = connectPresence(key, {

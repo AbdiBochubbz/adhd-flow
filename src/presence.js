@@ -1,11 +1,39 @@
-import { assignSeat, firstFreeSeat, gcRooms, listPublic, makeRoomCode, normalizeCode, sanitizeMember, sanitizeName } from "./room.js";
+import {
+  assignSeat,
+  firstFreeSeat,
+  gcRooms,
+  listPublic,
+  makeRoomCode,
+  membersFromPresence,
+  normalizeCode,
+  presencePayload,
+  publicRoomsFromPresence,
+  resolveSeat,
+  roomMetaFromPresence,
+  sanitizeMember,
+  sanitizeName,
+} from "./room.js";
+import { supabase } from "./supabase.js";
+
+export const LOBBY_TOPIC = "still-lobby";
+export const ROOM_TOPIC_PREFIX = "still-room:";
 
 const STORE_KEY = "still-rooms-v1";
 const CHANNEL = "still-rooms-v1";
 
-export function connectPresence(url, handlers) {
-  if (!url || url === "local") return connectLocal(handlers);
-  return connectSocket(url, handlers);
+/** Blank uses hosted Supabase presence. "local" stays on this device. A ws/wss address is optional. */
+export function presenceTarget(url) {
+  const value = String(url || "").trim();
+  if (value === "local") return "local";
+  if (/^wss?:\/\//i.test(value)) return value;
+  return "hosted";
+}
+
+export function connectPresence(url, handlers, options) {
+  const target = url === "local" || url === "hosted" || /^wss?:\/\//i.test(String(url || "")) ? url : presenceTarget(url);
+  if (target === "local") return connectLocal(handlers);
+  if (target === "hosted") return connectSupabase(handlers, options);
+  return connectSocket(target, handlers);
 }
 
 function connectLocal(handlers) {
@@ -149,6 +177,217 @@ function connectSocket(url, handlers) {
       socket?.close();
     },
   };
+}
+
+export function connectSupabase(handlers, options = {}) {
+  const client = options.client || supabase;
+  const memberId = options.memberId || localMemberId();
+  const lobbyTopic = options.lobbyTopic || LOBBY_TOPIC;
+  const roomPrefix = options.roomPrefix || ROOM_TOPIC_PREFIX;
+  let closed = false;
+  let generation = 0;
+  let current = null;
+  let roomChannel = null;
+  let lastMembers = [];
+  const lobby = client.channel(lobbyTopic, {
+    config: { presence: { key: memberId }, private: false },
+  });
+
+  const emitRoom = () => {
+    if (!current) {
+      handlers.onRoom?.(null, null);
+      return;
+    }
+    handlers.onRoom?.(
+      {
+        code: current.code,
+        name: current.name,
+        public: current.public,
+        members: lastMembers.map((member) => ({
+          id: member.id,
+          displayName: member.displayName,
+          chibi: member.chibi,
+          seat: member.seat,
+          focusing: member.focusing,
+        })),
+      },
+      { id: memberId, seat: current.seat },
+    );
+  };
+
+  const publishLobby = () => {
+    if (closed || !current?.public) {
+      lobby.untrack();
+      return;
+    }
+    lobby.track({
+      code: current.code,
+      name: current.name,
+      public: true,
+    });
+  };
+
+  const publishRoom = () => {
+    if (!roomChannel || !current) return;
+    const payload = presencePayload({
+      displayName: current.displayName,
+      chibi: current.chibi,
+      seat: current.seat,
+      focusing: current.focusing,
+      roomName: current.name,
+      public: current.public,
+      host: current.host,
+    });
+    if (!payload) return;
+    roomChannel.track(payload);
+  };
+
+  const syncRoom = () => {
+    if (!roomChannel || !current) return;
+    const state = roomChannel.presenceState();
+    const meta = roomMetaFromPresence(state);
+    if (meta && !current.host) {
+      if (meta.name && meta.name !== current.name) current.name = meta.name;
+      if (meta.public !== current.public) current.public = meta.public;
+    }
+    let members = membersFromPresence(state);
+    const seat = resolveSeat(members, memberId);
+    if (seat != null && seat !== current.seat) {
+      current.seat = seat;
+      publishRoom();
+      members = members.map((member) => (member.id === memberId ? { ...member, seat } : member));
+    }
+    lastMembers = members;
+    emitRoom();
+    publishLobby();
+  };
+
+  const closeRoom = async () => {
+    generation += 1;
+    const channel = roomChannel;
+    roomChannel = null;
+    current = null;
+    lastMembers = [];
+    if (channel) {
+      await channel.untrack();
+      await client.removeChannel(channel);
+    }
+    lobby.untrack();
+  };
+
+  const openRoom = (input, { host }) => {
+    const code = host ? freshCode() : normalizeCode(input.code);
+    if (!host && code.length !== 6) return { ok: false, error: "Enter the room code." };
+    const seat = host ? 0 : firstFreeSeat([], Number(input.seat));
+    const payload = presencePayload({
+      displayName: input.displayName,
+      chibi: input.chibi,
+      seat: seat ?? 0,
+      focusing: input.focusing,
+      roomName: input.name,
+      public: host ? input.public !== false : false,
+      host,
+    });
+    if (!payload) return { ok: false, error: "Add your name first." };
+    if (seat == null) return { ok: false, error: "Every seat is taken." };
+    const gen = generation + 1;
+    generation = gen;
+    const previous = roomChannel;
+    roomChannel = null;
+    current = {
+      code,
+      name: payload.roomName,
+      public: payload.public,
+      displayName: payload.displayName,
+      chibi: payload.chibi,
+      seat: payload.seat,
+      focusing: payload.focusing,
+      host,
+    };
+    lastMembers = [];
+    if (previous) {
+      previous.untrack();
+      client.removeChannel(previous);
+    }
+    const channel = client.channel(`${roomPrefix}${code}`, {
+      config: { presence: { key: memberId }, private: false },
+    });
+    roomChannel = channel;
+    channel.on("presence", { event: "sync" }, () => {
+      if (gen !== generation || roomChannel !== channel) return;
+      syncRoom();
+    });
+    channel.subscribe((status) => {
+      if (gen !== generation || roomChannel !== channel) return;
+      if (status === "SUBSCRIBED") {
+        handlers.onStatus?.("live", "");
+        publishRoom();
+        syncRoom();
+        return;
+      }
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        handlers.onStatus?.("error", "Study rooms could not connect.");
+      }
+    });
+    return { ok: true, code };
+  };
+
+  lobby.on("presence", { event: "sync" }, () => {
+    if (closed) return;
+    handlers.onRooms?.(publicRoomsFromPresence(lobby.presenceState()));
+  });
+  lobby.subscribe((status) => {
+    if (closed) return;
+    if (status === "SUBSCRIBED") {
+      handlers.onStatus?.("live", "");
+      publishLobby();
+      handlers.onRooms?.(publicRoomsFromPresence(lobby.presenceState()));
+    } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+      handlers.onStatus?.("error", "Study rooms could not connect.");
+    }
+  });
+
+  return {
+    key: "hosted",
+    mode: "hosted",
+    list() {
+      handlers.onRooms?.(publicRoomsFromPresence(lobby.presenceState()));
+    },
+    create(input) {
+      return openRoom(input, { host: true });
+    },
+    join(input) {
+      return openRoom(input, { host: false });
+    },
+    move(seat) {
+      if (!current || !roomChannel) return { ok: false, error: "Join a room first." };
+      const moved = assignSeat(lastMembers, memberId, seat);
+      if (!moved.ok) return moved;
+      current.seat = moved.seat;
+      publishRoom();
+      return { ok: true };
+    },
+    pose(focusing) {
+      if (!current) return;
+      current.focusing = Boolean(focusing);
+      publishRoom();
+    },
+    leave() {
+      closeRoom();
+      handlers.onRoom?.(null, null);
+    },
+    close() {
+      closed = true;
+      closeRoom();
+      client.removeChannel(lobby);
+    },
+  };
+}
+
+function freshCode() {
+  let code = "";
+  for (let i = 0; i < 5; i += 1) code = makeRoomCode();
+  return code;
 }
 
 function presenceBody(input) {

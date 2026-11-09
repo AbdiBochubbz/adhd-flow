@@ -3,6 +3,7 @@ import { daypart } from "./daypart.js";
 import { studyActivity } from "./study.js";
 import { draftFrom, previewCopy } from "./draft.js";
 import { h, icon, svg } from "./dom.js";
+import { presenceTarget } from "./presence.js";
 import { CHIBIS, SEAT_COUNT } from "./room.js";
 import { SUBJECTS, firstOpenStep, groupTasks, nextTask, urgencyOf } from "./model.js";
 import { REMINDER_LABELS, slotsForTask } from "./reminders.js";
@@ -1196,26 +1197,32 @@ function roomView(state) {
       ),
     ),
     room.mode === "public" ? publicRooms(room) : room.mode === "code" ? codeJoin(room) : createRoom(room),
-    h("label", { class: "field-label", for: "room-server" }, "Shared server"),
+    h("label", { class: "field-label", for: "room-server" }, "Room connection"),
     h("input", {
       id: "room-server",
       class: "field",
       value: room.serverUrl,
-      placeholder: "wss://example.com  ·  blank stays on this device",
+      placeholder: "Blank uses hosted rooms. local stays on this device.",
       spellcheck: "false",
       autocapitalize: "off",
     }),
     h(
       "button",
       { class: "btn-ghost", dataset: { action: "room-server" } },
-      room.serverUrl.trim() ? "Use this server" : "Keep rooms on this device",
+      presenceTarget(room.serverUrl) === "local"
+        ? "Keep rooms on this device"
+        : presenceTarget(room.serverUrl) === "hosted"
+          ? "Use hosted rooms"
+          : "Use this server",
     ),
     h(
       "p",
       { class: "fine" },
-      room.modeLabel === "server"
-        ? "Public rooms, codes, and invite links are shared through that server. It never receives your tasks."
-        : "With no server, those three ways to join work on this device only. Add a server address when another phone should see the room.",
+      room.modeLabel === "hosted"
+        ? "Public rooms, codes, and invite links reach other phones. Only a name, look, and seat are sent."
+        : room.modeLabel === "server"
+          ? "Public rooms, codes, and invite links are shared through that server. It never receives your tasks."
+          : "These rooms stay on this device. Clear the connection field to use hosted rooms.",
     ),
     room.error ? h("p", { class: "error" }, room.error) : null,
     ),

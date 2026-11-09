@@ -73,7 +73,7 @@ The file is `android/app/build/outputs/apk/debug/app-debug.apk`.
 
 2. Copy that APK to the phone.
 3. Open it. If Android blocks the install, allow installs from that app (Files, Chrome, or Drive) under **Settings → Apps → Special app access → Install unknown apps**.
-4. Still 1.6 (`app.still.tasks`, versionCode 16) is a fresh install, not an update of 1.0–1.3. If an older Still is installed, uninstall that app first, then install this APK. Uninstalling removes the old app’s on-device list. A new install opens the task list with no PIN.
+4. Still 1.6 was a fresh install, not an update of 1.0–1.3. Still 1.7 (`app.still.tasks`, versionCode 17) installs over 1.6 because it uses that same signing key. It does not install over 1.0–1.3. A new install opens the task list with no PIN.
 5. Allow notifications when asked. On Android 12 and newer, also allow **Alarms & reminders** (Settings → Apps → Still → Alarms & reminders) if a reminder does not fire while the app is closed. This build declares `USE_EXACT_ALARM`, so a sideloaded install is usually allowed to ring on time without that extra step. A future Play Store build may have to drop that permission and rely on the toggle instead.
 6. To sync, open **Settings → Account**, create an account with an email you can read, confirm that email on the website, then sign in inside the app. Nothing is uploaded before the email is confirmed.
 
@@ -96,15 +96,9 @@ The task list and the add screen shift with the clock: morning, midday, evening,
 - **Public** rooms can be browsed.
 - **Code** joins a room by its six-character code.
 - **Create** makes a public room, or a private one that only the code and invite link can open.
-- An invite link looks like `https://<your-site>/?room=AB23CD`. Inside the Android app it is `still://room?code=AB23CD`.
+- An invite link is `https://abdibochubbz.github.io/adhd-flow/?room=AB23CD` from the website and from the Android app. The Room tab also has a code field.
 
-With the shared-server field left blank, those three ways to join work on this device only. To share a room with another phone:
-
-```bash
-npm run presence
-```
-
-That listens on `ws://127.0.0.1:47322`. Put a `wss://` address in the room screen when the server is reachable from the phone. The server stores names, looks, and seats, and nothing else.
+Hosted rooms are on by default. They use Supabase Realtime Presence on the existing Still project. No account is required, and no separate presence server is running. A public channel carries a display name, look, seat, and whether that person is focusing. Tasks are not included. A private room is omitted from the public list. Type `local` in the connection field to keep a room on this device only. `npm run presence` is still available if you want to run your own `wss://` server.
 
 ### Signed release build
 

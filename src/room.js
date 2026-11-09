@@ -1,3 +1,5 @@
+import { PUBLIC_SITE_URL } from "./supabase.js";
+
 export const CHIBIS = [
   { id: "pebbles", label: "Pebbles" },
   { id: "moss", label: "Moss" },
@@ -72,19 +74,13 @@ export function firstFreeSeat(members, preferred) {
   return null;
 }
 
-export function inviteLink(code, href) {
-  let url;
-  try {
-    url = new URL(href);
-  } catch {
-    return `still://room?code=${code}`;
-  }
-  if ((url.protocol === "https:" || url.protocol === "http:") && !/^(localhost|127\.0\.0\.1)$/.test(url.hostname)) {
-    url.search = `?room=${code}`;
-    url.hash = "";
-    return url.toString();
-  }
-  return `still://room?code=${code}`;
+/** Invite links always open the website, including from the Android WebView at localhost. */
+export function inviteLink(code) {
+  const url = new URL(PUBLIC_SITE_URL);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("room", normalizeCode(code));
+  return url.toString();
 }
 
 export function roomCodeFromUrl(href) {
@@ -122,4 +118,77 @@ export function listPublic(rooms, now) {
     .filter((room) => room.public)
     .map((room) => ({ code: room.code, name: room.name, count: room.members.length }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
+}
+
+function latestPresence(metas) {
+  return Array.isArray(metas) && metas.length ? metas[metas.length - 1] : null;
+}
+
+/** Presence payloads are name, look, seat, and focus. Anything else is dropped. */
+export function presencePayload(input) {
+  const member = sanitizeMember(input);
+  if (!member) return null;
+  return {
+    displayName: member.displayName,
+    chibi: member.chibi,
+    seat: member.seat,
+    focusing: member.focusing,
+    roomName: sanitizeName(input?.roomName || input?.name, 40) || "Study room",
+    public: Boolean(input?.public),
+    host: Boolean(input?.host),
+  };
+}
+
+export function membersFromPresence(state) {
+  const members = [];
+  for (const [id, metas] of Object.entries(state || {})) {
+    if (!id) continue;
+    const member = sanitizeMember(latestPresence(metas));
+    if (!member) continue;
+    members.push({ id, ...member });
+  }
+  members.sort((left, right) => left.id.localeCompare(right.id));
+  return members;
+}
+
+export function roomMetaFromPresence(state) {
+  let fallback = null;
+  for (const metas of Object.values(state || {})) {
+    const raw = latestPresence(metas);
+    if (!raw) continue;
+    const name = sanitizeName(raw.roomName, 40);
+    const item = { name: name || "Study room", public: Boolean(raw.public), host: Boolean(raw.host) };
+    if (item.host && name) return item;
+    if (!fallback && name) fallback = item;
+  }
+  return fallback;
+}
+
+/** The earlier id keeps a contested seat. The other person takes the next free desk. */
+export function resolveSeat(members, memberId) {
+  const mine = (members || []).find((member) => member.id === memberId);
+  if (!mine) return null;
+  const earlier = (members || []).some((member) => member.id < memberId && member.seat === mine.seat);
+  if (!earlier) return mine.seat;
+  return firstFreeSeat((members || []).filter((member) => member.id !== memberId));
+}
+
+export function publicRoomsFromPresence(state, now = Date.now()) {
+  const rooms = {};
+  for (const [id, metas] of Object.entries(state || {})) {
+    const raw = latestPresence(metas);
+    if (!raw?.public) continue;
+    const code = normalizeCode(raw.code);
+    if (code.length !== 6) continue;
+    if (!rooms[code]) {
+      rooms[code] = {
+        code,
+        name: sanitizeName(raw.name, 40) || "Study room",
+        public: true,
+        members: [],
+      };
+    }
+    rooms[code].members.push({ id, seen: now });
+  }
+  return listPublic(rooms, now);
 }
