@@ -7,32 +7,43 @@ import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from "../src/supabase.js";
 function client() {
   return createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
+    realtime: { disconnectOnEmptyChannelsAfterMs: 0 },
   });
 }
 
-function waitFor(read, timeout = 8000) {
+function waitFor(read, timeout = 20000) {
   return new Promise((resolve, reject) => {
     const started = Date.now();
     const timer = setInterval(() => {
-      const value = read();
-      if (value) {
+      try {
+        const value = read();
+        if (value) {
+          clearInterval(timer);
+          resolve(value);
+        } else if (Date.now() - started > timeout) {
+          clearInterval(timer);
+          reject(new Error("timed out waiting for presence"));
+        }
+      } catch (error) {
         clearInterval(timer);
-        resolve(value);
-      } else if (Date.now() - started > timeout) {
-        clearInterval(timer);
-        reject(new Error("timed out waiting for presence"));
+        reject(error);
       }
-    }, 40);
+    }, 50);
   });
 }
 
-test("two clients share a hosted room without an account or task data", async () => {
+test("two clients share a hosted room without an account or task data", { timeout: 45_000 }, async () => {
   const suffix = crypto.randomUUID();
   const lobbyTopic = `still-lobby-test-${suffix}`;
   const roomPrefix = `still-room-test-${suffix}:`;
-  const seen = { a: null, b: null, rooms: [] };
+  const seen = { a: null, b: null, rooms: [], status: "" };
+  const hostClient = client();
+  const guestClient = client();
   const host = connectSupabase(
     {
+      onStatus(status, error) {
+        seen.status = `${status} ${error || ""}`.trim();
+      },
       onRoom(room) {
         seen.a = room;
       },
@@ -40,7 +51,7 @@ test("two clients share a hosted room without an account or task data", async ()
         seen.rooms = rooms;
       },
     },
-    { client: client(), memberId: "ana", lobbyTopic, roomPrefix },
+    { client: hostClient, memberId: "ana", lobbyTopic, roomPrefix },
   );
   const guest = connectSupabase(
     {
@@ -48,7 +59,7 @@ test("two clients share a hosted room without an account or task data", async ()
         seen.b = room;
       },
     },
-    { client: client(), memberId: "bo", lobbyTopic, roomPrefix },
+    { client: guestClient, memberId: "bo", lobbyTopic, roomPrefix },
   );
   try {
     const created = host.create({
@@ -59,7 +70,9 @@ test("two clients share a hosted room without an account or task data", async ()
       focusing: false,
     });
     assert.equal(created.ok, true);
-    const room = await waitFor(() => (seen.a?.members?.some((member) => member.displayName === "Ana") ? seen.a : null));
+    const room = await waitFor(() => (seen.a?.members?.some((member) => member.displayName === "Ana") ? seen.a : null)).catch((error) => {
+      throw new Error(`${error.message} (${seen.status || "no status"})`);
+    });
     assert.equal(room.name, "Afternoon study");
     assert.equal(JSON.stringify(room).includes("task"), false);
 
@@ -91,5 +104,9 @@ test("two clients share a hosted room without an account or task data", async ()
   } finally {
     host.close();
     guest.close();
+    await hostClient.removeAllChannels();
+    await guestClient.removeAllChannels();
+    await hostClient.realtime.disconnect();
+    await guestClient.realtime.disconnect();
   }
 });
